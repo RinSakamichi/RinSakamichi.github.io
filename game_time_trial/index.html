@@ -1,0 +1,2453 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>坂道輪のロードバイク・タイムアタック | Sakamichi Rin no Road Time Trial</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet" />
+  <style>
+    body {
+      font-family: 'Inter', 'Noto Sans JP', sans-serif;
+      overscroll-behavior: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    /* 1:1 正方形レスポンシブゲームステージ（ウィンドウ幅・高さの小さい方に合わせて最大化） */
+    #gameViewport {
+      width: min(100vw, 100vh);
+      height: min(100vw, 100vh);
+      aspect-ratio: 1 / 1;
+      container-type: size;
+    }
+    /* アナログブレーキ縦型スライダー（すべて相対単位 cqw でスケーリング） */
+    .brake-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      writing-mode: vertical-lr;
+      direction: rtl;
+      width: 3.2cqw;
+      height: 15cqw;
+      background: rgba(15, 23, 42, 0.85);
+      border-radius: 999px;
+      border: 0.28cqw solid rgba(148, 163, 184, 0.35);
+      cursor: pointer;
+    }
+    .brake-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 4.2cqw;
+      height: 2.5cqw;
+      border-radius: 1cqw;
+      background: linear-gradient(135deg, #f43f5e, #e11d48);
+      border: 0.28cqw solid #ffffff;
+      box-shadow: 0 0.4cqw 1.2cqw rgba(244, 63, 94, 0.65);
+    }
+    @keyframes pulseWarning {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.03); }
+    }
+    .corner-alert {
+      animation: pulseWarning 0.65s infinite ease-in-out;
+    }
+    /* 直感的なシフト推奨パルス＆ポップアップ演出 */
+    @keyframes shiftHintPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.85); transform: scale(1); }
+      50% { box-shadow: 0 0 0 0.9cqw rgba(56, 189, 248, 0); transform: scale(1.06); }
+    }
+    .shift-hint-up {
+      animation: shiftHintPulse 0.75s infinite;
+      border-color: #7dd3fc !important;
+    }
+    @keyframes shiftDownPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.9); transform: scale(1); }
+      50% { box-shadow: 0 0 0 0.9cqw rgba(251, 191, 36, 0); transform: scale(1.06); }
+    }
+    .shift-hint-down {
+      animation: shiftDownPulse 0.65s infinite;
+      border-color: #fde047 !important;
+      background-color: #d97706 !important;
+    }
+    @keyframes popInOut {
+      0% { opacity: 0; transform: translate(-50%, 10%) scale(0.7); }
+      18% { opacity: 1; transform: translate(-50%, -10%) scale(1.08); }
+      30% { opacity: 1; transform: translate(-50%, -15%) scale(1); }
+      80% { opacity: 1; transform: translate(-50%, -32%) scale(1); }
+      100% { opacity: 0; transform: translate(-50%, -50%) scale(0.95); }
+    }
+    .feedback-pop {
+      animation: popInOut 1.25s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    }
+    @keyframes countPop {
+      0% { opacity: 0; transform: scale(1.8); }
+      25% { opacity: 1; transform: scale(0.95); }
+      45% { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(0.85); }
+    }
+    .countdown-pop {
+      animation: countPop 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-800 overflow-hidden w-screen h-screen flex items-center justify-center relative">
+
+  <!-- 1:1 正方形ゲーム画面コンテナ（ウィンドウ幅・サイズに相対最適化） -->
+  <div id="gameViewport" class="relative overflow-hidden bg-slate-900 shadow-2xl border border-slate-800">
+
+    <!-- メイン描画キャンバス -->
+    <canvas id="sceneCanvas" class="block w-full h-full touch-none"></canvas>
+
+    <!-- タイヤロック・危険時の赤いビネット演出 -->
+    <div id="dangerVignette" class="absolute inset-0 pointer-events-none z-10 opacity-0 transition-opacity duration-75" style="box-shadow: inset 0 0 11cqw 2.5cqw rgba(244, 63, 94, 0.78);"></div>
+
+    <!-- 中央演出レイヤー：カウントダウン ＆ コーナー突破ポップアップ -->
+    <div id="countdownLayer" class="absolute inset-0 pointer-events-none z-[25] flex items-center justify-center hidden">
+      <div id="countdownText" class="text-[14cqw] font-black italic text-white drop-shadow-[0_0.8cqw_2cqw_rgba(15,23,42,0.85)] tracking-tight">3</div>
+    </div>
+    <div id="floatingFeedbackLayer" class="absolute inset-0 pointer-events-none z-[25] overflow-hidden"></div>
+
+    <!-- 上部HUD：正方形ステージ内の相対サイズ配置 -->
+    <header class="absolute top-[1.5%] left-[2%] right-[2%] flex flex-col gap-[0.8cqw] pointer-events-none z-20">
+      <div class="flex items-stretch justify-between gap-[1.2cqw]">
+        <!-- 左上：速度・ケイデンス・ギア表示 -->
+        <div class="pointer-events-auto bg-slate-900/80 backdrop-blur-md text-white border border-slate-700/80 shadow-xl rounded-[1.8cqw] px-[1.8cqw] py-[0.9cqw] flex items-center gap-[1.6cqw]">
+          <div>
+            <span class="text-slate-400 block text-[1.1cqw] font-bold tracking-wider">SPEED</span>
+            <div class="flex items-baseline gap-[0.5cqw]">
+              <span id="speedDisplay" class="font-black text-sky-400 text-[2.6cqw] leading-none tabular-nums">0.0</span>
+              <span class="text-[1.1cqw] text-slate-400 font-bold">km/h</span>
+            </div>
+          </div>
+          <div class="h-[3.4cqw] w-[0.15cqw] bg-slate-700"></div>
+          <div>
+            <span class="text-slate-400 block text-[1.1cqw] font-bold tracking-wider">CADENCE</span>
+            <div class="flex items-baseline gap-[0.5cqw]">
+              <span id="cadenceDisplay" class="font-extrabold text-emerald-400 text-[2.3cqw] leading-none tabular-nums">0</span>
+              <span class="text-[1.1cqw] text-slate-400 font-bold">RPM</span>
+            </div>
+          </div>
+          <div class="h-[3.4cqw] w-[0.15cqw] bg-slate-700"></div>
+          <div>
+            <span class="text-slate-400 block text-[1.1cqw] font-bold tracking-wider">GEAR</span>
+            <div class="flex items-baseline gap-[0.5cqw]">
+              <span id="gearDisplay" class="font-black text-amber-400 text-[2.3cqw] leading-none tabular-nums">2</span>
+              <span id="gearRatioDisplay" class="text-[1.1cqw] text-slate-400 font-semibold">52×28T</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右上：タイム・残りゴール距離・ベジェ切替 -->
+        <div class="pointer-events-auto bg-slate-900/80 backdrop-blur-md text-white border border-slate-700/80 shadow-xl rounded-[1.8cqw] px-[1.8cqw] py-[0.9cqw] flex items-center gap-[1.5cqw]">
+          <div>
+            <span class="text-slate-400 block text-[1.1cqw] font-bold tracking-wider">TIME</span>
+            <span id="timeDisplay" class="font-black text-white text-[2.2cqw] leading-none tabular-nums">00:00.00</span>
+          </div>
+          <div class="h-[3.4cqw] w-[0.15cqw] bg-slate-700"></div>
+          <div>
+            <span class="text-slate-400 block text-[1.1cqw] font-bold tracking-wider">GOAL</span>
+            <span id="goalDistDisplay" class="font-extrabold text-sky-300 text-[2.2cqw] leading-none tabular-nums">1200 m</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- コース進捗ミニバー -->
+      <div class="w-full bg-slate-900/75 backdrop-blur-md border border-slate-700/70 rounded-[1.4cqw] px-[1.6cqw] py-[0.6cqw] shadow-lg">
+        <div class="flex justify-between text-[1.1cqw] font-extrabold text-slate-300 mb-[0.3cqw]">
+          <span>START (0m)</span>
+          <span class="text-sky-400 tracking-wider">NOW: <strong id="currentDistLabel" class="text-white tabular-nums">0m</strong> / 1200m</span>
+          <span>GOAL (1200m)</span>
+        </div>
+        <div class="w-full bg-slate-950/90 border border-slate-700/80 rounded-full h-[1.4cqw] relative">
+          <div id="courseProgressBar" class="h-full bg-gradient-to-r from-blue-500 via-sky-400 to-emerald-400 rounded-full" style="width: 0%"></div>
+          <div id="courseCornerMarkers" class="absolute inset-0 pointer-events-none"></div>
+          <!-- サイクリスト現在位置マーカー -->
+          <div id="courseRiderMarker" class="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-[1.8cqw] h-[1.8cqw] rounded-full bg-amber-400 border-[0.25cqw] border-white shadow-md z-10 pointer-events-none" style="left: 0%"></div>
+        </div>
+      </div>
+
+      <!-- カーブ減速警告バナー（現在速度が目標以下なら即座に緑 SAFE に変化） -->
+      <div id="cornerWarningBox" class="hidden self-end pointer-events-none">
+        <div id="cornerAlertCard" class="corner-alert bg-rose-600/95 backdrop-blur-md text-white border-[0.28cqw] border-amber-300 shadow-2xl rounded-[1.8cqw] px-[2cqw] py-[0.9cqw] flex items-center gap-[1.4cqw] transition-colors duration-150">
+          <div id="cornerStatusIcon" class="text-[2.6cqw] font-black leading-none">⚠️</div>
+          <div>
+            <div class="flex items-center gap-[1cqw]">
+              <span class="text-[1.1cqw] font-extrabold uppercase tracking-wider text-amber-200" id="cornerNameLabel">HAIRPIN CORNER AHEAD</span>
+              <span id="cornerSafetyBadge" class="px-[0.8cqw] py-[0.15cqw] rounded-full text-[1cqw] font-black bg-amber-300 text-rose-900">要減速!</span>
+            </div>
+            <div class="flex items-baseline gap-[1.8cqw]">
+              <span class="text-[1.4cqw] font-bold">目標: <strong id="cornerTargetSpeed" class="text-[2.1cqw] font-black text-amber-300 tabular-nums">32 km/h</strong> 以下</span>
+              <span class="text-[1.4cqw] font-bold">あと <strong id="cornerRemainDist" class="text-[2.1cqw] font-black text-white tabular-nums">120 m</strong></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- 下部コックピット：正方形フレーム内の相対サイズ（cqw）配置 -->
+    <footer class="absolute bottom-[2.2%] left-[2.2%] right-[2.2%] z-20 pointer-events-none">
+      <div class="w-full flex items-end justify-between gap-[1.5cqw]">
+
+        <!-- 左下コーナー：左足ペダリング円盤 ＋ 左ブレーキ（リア） -->
+        <div class="pointer-events-auto bg-slate-900/88 backdrop-blur-xl border border-slate-700/80 shadow-2xl rounded-[2.8cqw] p-[1.8cqw] flex items-center gap-[1.8cqw]">
+          <div class="flex flex-col items-center">
+            <div class="flex items-center gap-[0.6cqw] mb-[0.6cqw]">
+              <span class="w-[1cqw] h-[1cqw] rounded-full bg-amber-400"></span>
+              <span class="text-[1.4cqw] font-extrabold text-slate-200">左足 (L)</span>
+              <span class="px-[0.6cqw] py-[0.1cqw] rounded bg-slate-800 border border-slate-600 text-[1.05cqw] font-bold text-amber-300">WASD</span>
+            </div>
+            <canvas id="leftPedalPad" width="180" height="180" class="w-[16cqw] h-[16cqw] rounded-full bg-slate-950/90 border-[0.25cqw] border-slate-700 cursor-grab active:cursor-grabbing touch-none shadow-inner"></canvas>
+            <span id="leftTorqueLabel" class="text-[1.4cqw] font-bold text-amber-300 mt-[0.6cqw] tabular-nums">効率: 0%</span>
+          </div>
+
+          <div class="flex flex-col items-center">
+            <span class="text-[1.2cqw] font-extrabold text-rose-400 mb-[0.6cqw]">L-BRK [F]</span>
+            <input id="leftBrakeSlider" type="range" min="0" max="100" value="0" class="brake-slider" />
+            <div class="w-[3.8cqw] h-[0.9cqw] bg-slate-800 rounded-full overflow-hidden mt-[0.8cqw] border border-slate-700">
+              <div id="rearLockBar" class="h-full bg-rose-500 transition-all duration-75" style="width: 0%"></div>
+            </div>
+            <span id="rearLockText" class="text-[1.2cqw] font-bold text-slate-400 mt-[0.4cqw]">LOCK 0%</span>
+          </div>
+        </div>
+
+        <!-- 下部中央：シフトチェンジ＆クランク抵抗メーター -->
+        <div class="pointer-events-auto bg-slate-900/88 backdrop-blur-xl border border-slate-700/80 shadow-2xl rounded-[2.8cqw] px-[2cqw] py-[1.8cqw] flex flex-col items-center gap-[1.2cqw] flex-1 max-w-[34cqw]">
+          <div class="flex flex-col items-center gap-[0.6cqw] w-full">
+            <div class="text-[1.3cqw] font-extrabold tracking-wider text-slate-400">SHIFT CHANGE</div>
+            <div class="flex items-center justify-center gap-[1cqw] w-full">
+              <button id="shiftDownBtn" class="py-[1.1cqw] px-[1.3cqw] rounded-[1.4cqw] bg-slate-800 hover:bg-slate-700 active:scale-95 text-white font-black text-[1.45cqw] border border-slate-600 shadow transition">
+                ▼ 軽く <span class="text-[1.1cqw] text-slate-300">[U]</span>
+              </button>
+              <div class="px-[1.6cqw] py-[0.5cqw] rounded-[1.4cqw] bg-slate-950 border border-amber-500/50 text-center min-w-[5.5cqw]">
+                <span id="centerGearNum" class="text-[2.8cqw] leading-none font-black text-amber-400 tabular-nums">2</span>
+              </div>
+              <button id="shiftUpBtn" class="py-[1.1cqw] px-[1.3cqw] rounded-[1.4cqw] bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-black text-[1.45cqw] border border-blue-400 shadow transition">
+                ▲ 重く <span class="text-[1.1cqw] text-sky-200">[O]</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="w-full space-y-[0.8cqw]">
+            <div>
+              <div class="flex justify-between text-[1.3cqw] font-bold mb-[0.3cqw]">
+                <span class="text-slate-400">必要トルク</span>
+                <span id="stallWarningText" class="text-sky-400">回転OK</span>
+              </div>
+              <div class="w-full h-[1.1cqw] bg-slate-950 rounded-full overflow-hidden border border-slate-700 relative">
+                <div id="resistanceBar" class="h-full bg-amber-500/85 transition-all duration-75" style="width: 25%"></div>
+              </div>
+            </div>
+            <div>
+              <div class="flex justify-between text-[1.3cqw] font-bold mb-[0.3cqw]">
+                <span class="text-slate-400">現在駆動</span>
+                <span id="torqueValueText" class="text-emerald-400 tabular-nums">0 Nm</span>
+              </div>
+              <div class="w-full h-[1.1cqw] bg-slate-950 rounded-full overflow-hidden border border-slate-700">
+                <div id="appliedTorqueBar" class="h-full bg-emerald-400 transition-all duration-75" style="width: 0%"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右下コーナー：右ブレーキ（フロント） ＋ 右足ペダリング円盤 -->
+        <div class="pointer-events-auto bg-slate-900/88 backdrop-blur-xl border border-slate-700/80 shadow-2xl rounded-[2.8cqw] p-[1.8cqw] flex items-center gap-[1.8cqw]">
+          <div class="flex flex-col items-center">
+            <span class="text-[1.2cqw] font-extrabold text-rose-400 mb-[0.6cqw]">R-BRK [H]</span>
+            <input id="rightBrakeSlider" type="range" min="0" max="100" value="0" class="brake-slider" />
+            <div class="w-[3.8cqw] h-[0.9cqw] bg-slate-800 rounded-full overflow-hidden mt-[0.8cqw] border border-slate-700">
+              <div id="frontLockBar" class="h-full bg-rose-500 transition-all duration-75" style="width: 0%"></div>
+            </div>
+            <span id="frontLockText" class="text-[1.2cqw] font-bold text-slate-400 mt-[0.4cqw]">LOCK 0%</span>
+          </div>
+
+          <div class="flex flex-col items-center">
+            <div class="flex items-center gap-[0.6cqw] mb-[0.6cqw]">
+              <span class="w-[1cqw] h-[1cqw] rounded-full bg-sky-400"></span>
+              <span class="text-[1.4cqw] font-extrabold text-slate-200">右足 (R)</span>
+              <span class="px-[0.6cqw] py-[0.1cqw] rounded bg-slate-800 border border-slate-600 text-[1.05cqw] font-bold text-sky-300">↑←↓→</span>
+            </div>
+            <canvas id="rightPedalPad" width="180" height="180" class="w-[16cqw] h-[16cqw] rounded-full bg-slate-950/90 border-[0.25cqw] border-slate-700 cursor-grab active:cursor-grabbing touch-none shadow-inner"></canvas>
+            <span id="rightTorqueLabel" class="text-[1.4cqw] font-bold text-sky-300 mt-[0.6cqw] tabular-nums">効率: 0%</span>
+          </div>
+        </div>
+
+      </div>
+    </footer>
+
+    <!-- スタート／ゲームオーバー／ゴール リザルトモーダル -->
+    <div id="overlayModal" class="absolute inset-0 z-30 bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-[4cqw]">
+      <div class="bg-slate-900 border border-slate-700 text-white rounded-[3.2cqw] w-[82cqw] p-[3.5cqw] shadow-2xl space-y-[2.2cqw]">
+        <div class="flex items-center gap-[2cqw]">
+          <div id="modalBadgeIcon" class="w-[6.5cqw] h-[6.5cqw] rounded-[1.8cqw] bg-gradient-to-br from-blue-600 to-sky-400 flex items-center justify-center text-[3.5cqw] shadow-lg shrink-0">
+            🚴‍♀️
+          </div>
+          <div>
+            <span id="modalSubtitle" class="text-[1.5cqw] font-extrabold uppercase tracking-wider text-sky-400">SAKAMICHI RIN NO ROAD TIME TRIAL</span>
+            <h2 id="modalTitle" class="text-[2.8cqw] font-black text-white leading-tight">坂道輪の ロードバイク・タイムアタック</h2>
+          </div>
+        </div>
+
+        <p id="modalDescription" class="text-[1.8cqw] text-slate-300 leading-relaxed">
+          左右の足（円盤パネル）を独立して回し、適切なギア選択とブレーキングで <strong class="text-white">1,200m</strong> のテクニカルコースを最速で駆け抜けよう！
+        </p>
+
+        <div id="modalRulesBox" class="bg-slate-950/80 border border-slate-800 rounded-[2cqw] p-[2.2cqw] space-y-[1.4cqw] text-[1.6cqw] text-slate-300">
+          <div class="flex items-start gap-[1.4cqw]">
+            <span class="px-[1cqw] py-[0.3cqw] rounded-[0.8cqw] bg-sky-500/20 text-sky-300 font-bold shrink-0">1. ペダリング</span>
+            <span>円盤ドラッグ、または<strong>左足 [WASD]・右足 [↑←↓→ / IJKL]</strong>の4方向キーで<strong>紫の扇形ガイド（180°逆位相）</strong>に合わせて回します。変速は <strong>[U] 軽く / [O] 重く</strong> です。</span>
+          </div>
+          <div class="flex items-start gap-[1.4cqw]">
+            <span class="px-[1cqw] py-[0.3cqw] rounded-[0.8cqw] bg-amber-500/20 text-amber-300 font-bold shrink-0">2. カーブ減速</span>
+            <span>カーブ手前のカウントダウンまでに<strong>目標速度以下（緑 SAFE）</strong>へ減速しないとコースアウトで失格になります。</span>
+          </div>
+          <div class="flex items-start gap-[1.4cqw]">
+            <span class="px-[1cqw] py-[0.3cqw] rounded-[0.8cqw] bg-rose-500/20 text-rose-300 font-bold shrink-0">3. ブレーキ</span>
+            <span>左右のアナログレバー（または <strong>[F] 左 / [H] 右</strong> キー）で前後独立制動。強く引きすぎると<strong>タイヤがロック</strong>し、続くと転倒します！</span>
+          </div>
+        </div>
+
+        <div id="modalResultStats" class="hidden grid grid-cols-2 gap-[2cqw] bg-slate-950/80 border border-slate-800 rounded-[2cqw] p-[2.2cqw]">
+          <div>
+            <span class="text-[1.5cqw] text-slate-400 block">記録タイム</span>
+            <span id="resultTimeText" class="text-[3cqw] font-black text-emerald-400 tabular-nums">00:00.00</span>
+          </div>
+          <div>
+            <span class="text-[1.5cqw] text-slate-400 block">最高速度</span>
+            <span id="resultMaxSpeedText" class="text-[3cqw] font-black text-sky-400 tabular-nums">0.0 km/h</span>
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-[1.2cqw]">
+          <button id="shareXBtn" class="hidden w-full py-[1.6cqw] px-[3cqw] rounded-[2cqw] bg-slate-950 hover:bg-slate-800 active:scale-[0.99] text-white font-black text-[2cqw] border border-slate-600 shadow-lg flex items-center justify-center gap-[1.2cqw] transition cursor-pointer">
+            <span class="text-[2.2cqw] leading-none">𝕏</span>
+            <span>タイムをポストする</span>
+          </button>
+
+          <button id="startRaceBtn" class="w-full py-[1.8cqw] px-[3cqw] rounded-[2cqw] bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-500 hover:to-sky-400 active:scale-[0.99] text-white font-black text-[2.2cqw] shadow-lg shadow-blue-600/30 transition cursor-pointer">
+            レーススタート！
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    /**
+     * ============================================================================
+     * 坂道輪の ベジェ曲線ロードバイク・タイムアタックゲーム（完全版）
+     * ============================================================================
+     */
+
+    const gameViewport = document.getElementById('gameViewport');
+    const canvas = document.getElementById('sceneCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const leftPad = document.getElementById('leftPedalPad');
+    const leftPadCtx = leftPad.getContext('2d');
+    const rightPad = document.getElementById('rightPedalPad');
+    const rightPadCtx = rightPad.getContext('2d');
+
+    // HUD要素
+    const speedDisplay = document.getElementById('speedDisplay');
+    const cadenceDisplay = document.getElementById('cadenceDisplay');
+    const gearDisplay = document.getElementById('gearDisplay');
+    const gearRatioDisplay = document.getElementById('gearRatioDisplay');
+    const timeDisplay = document.getElementById('timeDisplay');
+    const goalDistDisplay = document.getElementById('goalDistDisplay');
+    const currentDistLabel = document.getElementById('currentDistLabel');
+    const courseProgressBar = document.getElementById('courseProgressBar');
+    const courseRiderMarker = document.getElementById('courseRiderMarker');
+    const courseCornerMarkers = document.getElementById('courseCornerMarkers');
+    const cornerWarningBox = document.getElementById('cornerWarningBox');
+    const cornerAlertCard = document.getElementById('cornerAlertCard');
+    const cornerStatusIcon = document.getElementById('cornerStatusIcon');
+    const cornerSafetyBadge = document.getElementById('cornerSafetyBadge');
+    const cornerNameLabel = document.getElementById('cornerNameLabel');
+    const cornerTargetSpeed = document.getElementById('cornerTargetSpeed');
+    const cornerRemainDist = document.getElementById('cornerRemainDist');
+    const dangerVignette = document.getElementById('dangerVignette');
+    const countdownLayer = document.getElementById('countdownLayer');
+    const countdownText = document.getElementById('countdownText');
+    const floatingFeedbackLayer = document.getElementById('floatingFeedbackLayer');
+
+    // コントロールUI
+    const leftBrakeSlider = document.getElementById('leftBrakeSlider');
+    const rightBrakeSlider = document.getElementById('rightBrakeSlider');
+    const rearLockBar = document.getElementById('rearLockBar');
+    const frontLockBar = document.getElementById('frontLockBar');
+    const rearLockText = document.getElementById('rearLockText');
+    const frontLockText = document.getElementById('frontLockText');
+    const leftTorqueLabel = document.getElementById('leftTorqueLabel');
+    const rightTorqueLabel = document.getElementById('rightTorqueLabel');
+    const shiftDownBtn = document.getElementById('shiftDownBtn');
+    const shiftUpBtn = document.getElementById('shiftUpBtn');
+    const centerGearNum = document.getElementById('centerGearNum');
+    const resistanceBar = document.getElementById('resistanceBar');
+    const appliedTorqueBar = document.getElementById('appliedTorqueBar');
+    const stallWarningText = document.getElementById('stallWarningText');
+    const torqueValueText = document.getElementById('torqueValueText');
+
+    // モーダル要素
+    const overlayModal = document.getElementById('overlayModal');
+    const modalBadgeIcon = document.getElementById('modalBadgeIcon');
+    const modalSubtitle = document.getElementById('modalSubtitle');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalDescription = document.getElementById('modalDescription');
+    const modalRulesBox = document.getElementById('modalRulesBox');
+    const modalResultStats = document.getElementById('modalResultStats');
+    const resultTimeText = document.getElementById('resultTimeText');
+    const resultMaxSpeedText = document.getElementById('resultMaxSpeedText');
+    const shareXBtn = document.getElementById('shareXBtn');
+    const startRaceBtn = document.getElementById('startRaceBtn');
+
+    // 8段ギア設定（フロント52T固定 × リアスプロケット歯数）
+    const GEARS = [
+      { num: 1, rear: 32, ratio: 52 / 32 },
+      { num: 2, rear: 28, ratio: 52 / 28 },
+      { num: 3, rear: 24, ratio: 52 / 24 },
+      { num: 4, rear: 21, ratio: 52 / 21 },
+      { num: 5, rear: 18, ratio: 52 / 18 },
+      { num: 6, rear: 15, ratio: 52 / 15 },
+      { num: 7, rear: 13, ratio: 52 / 13 },
+      { num: 8, rear: 11, ratio: 52 / 11 }
+    ];
+
+    // コースレイアウト（全長1200m・5つの減速コーナー）
+    const COURSE_LENGTH = 1200; // meters
+    const CORNERS = [
+      { id: 1, name: '第1コーナー（中速ベント）', dist: 240, warnDist: 110, maxSpeedKmh: 38, passed: false },
+      { id: 2, name: '第2コーナー（タイトS字）', dist: 490, warnDist: 130, maxSpeedKmh: 28, passed: false },
+      { id: 3, name: '第3コーナー（高速シケイン）', dist: 740, warnDist: 120, maxSpeedKmh: 35, passed: false },
+      { id: 4, name: '第4コーナー（急ヘアピン）', dist: 960, warnDist: 145, maxSpeedKmh: 23, passed: false },
+      { id: 5, name: '最終シケイン（ゴール前）', dist: 1120, warnDist: 115, maxSpeedKmh: 33, passed: false }
+    ];
+
+    // ゲーム＆物理状態
+    const game = {
+      phase: 'title', // 'title' | 'countdown' | 'playing' | 'gameover' | 'goal'
+      countdownVal: 3,
+      countdownTimer: 0,
+      elapsedTime: 0,
+      distance: 0,
+      speedMs: 0,
+      maxSpeedKmh: 0,
+      crankAngle: 0.35,
+      crankOmega: 0,
+      rearWheelAngle: 0,
+      frontWheelAngle: 0,
+      gearIndex: 1,
+
+      // 左右独立ペダリング力ベクトル入力
+      rightPedal: { active: false, pointerDragging: false, vx: 0, vy: 0, mag: 0, efficiency: 0 },
+      leftPedal: { active: false, pointerDragging: false, vx: 0, vy: 0, mag: 0, efficiency: 0 },
+
+      // 左右独立アナログブレーキ & ロック蓄積ゲージ
+      leftBrake: 0,
+      rightBrake: 0,
+      rearLocked: false,
+      frontLocked: false,
+      rearLockGauge: 0,
+      frontLockGauge: 0,
+
+      // 動的ポーズ・カメラ・エフェクト状態
+      bikePitch: 0,
+      riderLean: 0,
+      stallShake: 0,
+      cameraShake: 0,
+      sweetSpotGlow: 0,
+      lastSkidBeep: 0,
+      skidParticles: [],
+      windParticles: [],
+      sweatDrops: [],
+      confetti: [],
+      crashAngle: 0,
+      crashOffsetY: 0,
+      roadOffset: 0,
+      hillOffset: 0,
+      mountainOffset: 0,
+      lastTime: performance.now(),
+      audioReady: false,
+      shiftSynth: null,
+      skidNoise: null
+    };
+
+    /**
+     * ============================================================================
+     * サウンドエフェクト & 視覚フィードバック（Tone.js）
+     * ============================================================================
+     */
+    async function initAudio() {
+      if (game.audioReady || typeof Tone === 'undefined') return;
+      try {
+        await Tone.start();
+        game.shiftSynth = new Tone.Synth({
+          oscillator: { type: 'triangle' },
+          envelope: { attack: 0.005, decay: 0.08, sustain: 0, release: 0.05 }
+        }).toDestination();
+        game.shiftSynth.volume.value = -10;
+
+        game.skidNoise = new Tone.NoiseSynth({
+          noise: { type: 'white' },
+          envelope: { attack: 0.01, decay: 0.14, sustain: 0.2, release: 0.08 }
+        }).toDestination();
+        game.skidNoise.volume.value = -20;
+        game.audioReady = true;
+      } catch (e) {}
+    }
+
+    function playShiftSound(up) {
+      if (!game.audioReady || !game.shiftSynth) return;
+      try { game.shiftSynth.triggerAttackRelease(up ? 'E5' : 'A4', '32n'); } catch (e) {}
+    }
+
+    function playCountdownSound(isGo) {
+      if (!game.audioReady || !game.shiftSynth) return;
+      try { game.shiftSynth.triggerAttackRelease(isGo ? 'C6' : 'G4', isGo ? '8n' : '16n'); } catch (e) {}
+    }
+
+    function playCornerClearSound() {
+      if (!game.audioReady || !game.shiftSynth) return;
+      try {
+        const now = Tone.now();
+        game.shiftSynth.triggerAttackRelease('C5', '16n', now);
+        game.shiftSynth.triggerAttackRelease('G5', '16n', now + 0.08);
+      } catch (e) {}
+    }
+
+    function playGoalFanfare() {
+      if (!game.audioReady || !game.shiftSynth) return;
+      try {
+        const now = Tone.now();
+        game.shiftSynth.triggerAttackRelease('C5', '16n', now);
+        game.shiftSynth.triggerAttackRelease('E5', '16n', now + 0.1);
+        game.shiftSynth.triggerAttackRelease('G5', '16n', now + 0.2);
+        game.shiftSynth.triggerAttackRelease('C6', '4n', now + 0.3);
+      } catch (e) {}
+    }
+
+    function playCrashSound() {
+      if (!game.audioReady || !game.skidNoise) return;
+      try { game.skidNoise.triggerAttackRelease('8n'); } catch (e) {}
+    }
+
+    function spawnFloatingFeedback(title, sub, colorClass) {
+      const el = document.createElement('div');
+      el.className = `feedback-pop absolute left-1/2 top-[34%] text-center pointer-events-none select-none`;
+      el.innerHTML = `
+        <div class="text-[3.4cqw] font-black italic tracking-tight ${colorClass} drop-shadow-[0_0.4cqw_1cqw_rgba(15,23,42,0.9)]">${title}</div>
+        <div class="text-[1.5cqw] font-extrabold text-white drop-shadow-[0_0.2cqw_0.6cqw_rgba(15,23,42,0.9)]">${sub}</div>
+      `;
+      floatingFeedbackLayer.appendChild(el);
+      setTimeout(() => el.remove(), 1300);
+    }
+
+    // 1:1 正方形ステージのサイズ同期
+    let viewportSize = 600;
+    function resizeCanvas() {
+      const rect = gameViewport.getBoundingClientRect();
+      viewportSize = rect.width || Math.min(window.innerWidth, window.innerHeight) || 600;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = viewportSize * dpr;
+      canvas.height = viewportSize * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener('resize', resizeCanvas);
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(resizeCanvas).observe(gameViewport);
+    }
+
+    function renderCourseMarkers() {
+      courseCornerMarkers.innerHTML = '';
+      CORNERS.forEach((c) => {
+        const pct = (c.dist / COURSE_LENGTH) * 100;
+        const dot = document.createElement('div');
+        dot.className = 'absolute top-0 bottom-0 w-[0.35cqw] bg-rose-500';
+        dot.style.left = `${pct}%`;
+        courseCornerMarkers.appendChild(dot);
+      });
+    }
+
+    /**
+     * ============================================================================
+     * BezierPen ＆ 2関節IKユーティリティ
+     * ============================================================================
+     */
+    class BezierPen {
+      constructor(context) {
+        this.ctx = context;
+      }
+      begin() { this.ctx.beginPath(); }
+      moveTo(x, y) { this.ctx.moveTo(x, y); }
+      lineTo(x, y) { this.ctx.lineTo(x, y); }
+      bezierTo(cp1x, cp1y, cp2x, cp2y, x, y) { this.ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y); }
+      quadTo(cpx, cpy, x, y) { this.ctx.quadraticCurveTo(cpx, cpy, x, y); }
+      bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y) { this.ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y); }
+      quadraticCurveTo(cpx, cpy, x, y) { this.ctx.quadraticCurveTo(cpx, cpy, x, y); }
+      close() { this.ctx.closePath(); }
+      paint({ fill = null, stroke = '#18202c', lineWidth = 2.2, lineJoin = 'round', lineCap = 'round' } = {}) {
+        this.ctx.lineJoin = lineJoin;
+        this.ctx.lineCap = lineCap;
+        if (fill) {
+          this.ctx.fillStyle = fill;
+          this.ctx.fill();
+        }
+        if (stroke && lineWidth > 0) {
+          this.ctx.strokeStyle = stroke;
+          this.ctx.lineWidth = lineWidth;
+          this.ctx.stroke();
+        }
+      }
+    }
+
+    const pen = new BezierPen(ctx);
+
+    function solve2JointIK(hip, ankle, thighLen, shinLen, bendForward = true) {
+      const dx = ankle.x - hip.x;
+      const dy = ankle.y - hip.y;
+      const distSq = dx * dx + dy * dy;
+      const maxReach = (thighLen + shinLen) * 0.992;
+      const minReach = Math.abs(thighLen - shinLen) + 2;
+      const d = Math.min(Math.max(Math.sqrt(distSq), minReach), maxReach);
+
+      const cosAlpha = (thighLen * thighLen + d * d - shinLen * shinLen) / (2 * thighLen * d);
+      const alpha = Math.acos(Math.min(1, Math.max(-1, cosAlpha)));
+      const baseAngle = Math.atan2(dy, dx);
+      const kneeAngle = bendForward ? baseAngle + alpha : baseAngle - alpha;
+
+      return {
+        x: hip.x + Math.cos(kneeAngle) * thighLen,
+        y: hip.y + Math.sin(kneeAngle) * thighLen
+      };
+    }
+
+    function getSegmentBasis(p1, p2) {
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      return { ux, uy, nx: -uy, ny: ux, len };
+    }
+
+    const pedalKeyState = {
+      left: { up: false, down: false, left: false, right: false },
+      right: { up: false, down: false, left: false, right: false }
+    };
+
+    function applyKeyboardPedalVector(keys, pedalState) {
+      if (pedalState.pointerDragging) return;
+      const dx = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+      const dy = (keys.down ? 1 : 0) - (keys.up ? 1 : 0);
+      if (dx === 0 && dy === 0) {
+        pedalState.active = false;
+        pedalState.vx = 0;
+        pedalState.vy = 0;
+        pedalState.mag = 0;
+      } else {
+        const len = Math.hypot(dx, dy);
+        pedalState.active = true;
+        pedalState.vx = dx / len;
+        pedalState.vy = dy / len;
+        pedalState.mag = 1.0;
+      }
+    }
+
+    function setupPedalPad(padCanvas, pedalState) {
+      let dragging = false;
+
+      function updateVectorFromPointer(e) {
+        const rect = padCanvas.getBoundingClientRect();
+        const cx = rect.width * 0.5;
+        const cy = rect.height * 0.5;
+        const maxR = rect.width * 0.42;
+        const dx = (e.clientX - rect.left) - cx;
+        const dy = (e.clientY - rect.top) - cy;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist < 4) {
+          pedalState.vx = 0;
+          pedalState.vy = 0;
+          pedalState.mag = 0;
+          return;
+        }
+        const clamped = Math.min(dist, maxR);
+        pedalState.vx = (dx / dist) * (clamped / maxR);
+        pedalState.vy = (dy / dist) * (clamped / maxR);
+        pedalState.mag = clamped / maxR;
+      }
+
+      padCanvas.addEventListener('pointerdown', (e) => {
+        initAudio();
+        dragging = true;
+        pedalState.pointerDragging = true;
+        pedalState.active = true;
+        try { padCanvas.setPointerCapture(e.pointerId); } catch (err) {}
+        updateVectorFromPointer(e);
+      });
+
+      padCanvas.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        updateVectorFromPointer(e);
+      });
+
+      const endDrag = (e) => {
+        if (!dragging) return;
+        dragging = false;
+        pedalState.pointerDragging = false;
+        pedalState.active = false;
+        pedalState.vx = 0;
+        pedalState.vy = 0;
+        pedalState.mag = 0;
+        try {
+          if (e.pointerId !== undefined && padCanvas.hasPointerCapture(e.pointerId)) {
+            padCanvas.releasePointerCapture(e.pointerId);
+          }
+        } catch (err) {}
+        applyKeyboardPedalVector(pedalKeyState.left, game.leftPedal);
+        applyKeyboardPedalVector(pedalKeyState.right, game.rightPedal);
+      };
+
+      padCanvas.addEventListener('pointerup', endDrag);
+      padCanvas.addEventListener('pointercancel', endDrag);
+    }
+
+    setupPedalPad(rightPad, game.rightPedal);
+    setupPedalPad(leftPad, game.leftPedal);
+
+    // 円盤コントロールパッドのリアルタイム描画（スイートスポット扇形ガイド＋噛み合い発光）
+    function drawPedalPadUI(pCtx, padCanvas, crankTheta, pedalState, accentColor) {
+      const w = padCanvas.width;
+      const h = padCanvas.height;
+      const cx = w * 0.5;
+      const cy = h * 0.5;
+      const r = w * 0.37;
+
+      pCtx.clearRect(0, 0, w, h);
+
+      // スイートスポット（最適方向±28°）の扇形ハイライトゾーン
+      const optTx = Math.sin(crankTheta);
+      const optTy = -Math.cos(crankTheta);
+      const optAngle = Math.atan2(optTy, optTx);
+      const isSweet = pedalState.active && pedalState.efficiency > 0.78 && pedalState.mag > 0.35;
+
+      pCtx.save();
+      pCtx.beginPath();
+      pCtx.moveTo(cx, cy);
+      pCtx.arc(cx, cy, r, optAngle - 0.48, optAngle + 0.48);
+      pCtx.closePath();
+      pCtx.fillStyle = isSweet ? 'rgba(52, 211, 153, 0.36)' : 'rgba(192, 132, 252, 0.16)';
+      pCtx.fill();
+      pCtx.restore();
+
+      // 外周トラック
+      pCtx.strokeStyle = isSweet ? 'rgba(52, 211, 153, 0.92)' : 'rgba(148, 163, 184, 0.28)';
+      pCtx.lineWidth = isSweet ? 3.5 : 1.5;
+      pCtx.beginPath();
+      pCtx.arc(cx, cy, r, 0, Math.PI * 2);
+      pCtx.stroke();
+
+      // 十字ガイド
+      pCtx.strokeStyle = 'rgba(148, 163, 184, 0.2)';
+      pCtx.lineWidth = 1.2;
+      pCtx.beginPath();
+      pCtx.moveTo(cx - r - 6, cy);
+      pCtx.lineTo(cx + r + 6, cy);
+      pCtx.moveTo(cx, cy - r - 6);
+      pCtx.lineTo(cx, cy + r + 6);
+      pCtx.stroke();
+
+      // 必要最小ベクトル長（破線円）
+      const reqRatio = getRequiredForceRatio();
+      const reqRadius = Math.min(r * 1.04, r * reqRatio);
+      pCtx.strokeStyle = reqRatio > 1.0 ? 'rgba(244, 63, 94, 0.75)' : 'rgba(251, 191, 36, 0.5)';
+      pCtx.setLineDash([4, 3]);
+      pCtx.lineWidth = 1.6;
+      pCtx.beginPath();
+      pCtx.arc(cx, cy, reqRadius, 0, Math.PI * 2);
+      pCtx.stroke();
+      pCtx.setLineDash([]);
+
+      // クランクアーム＆ペダル位置
+      const px = cx + Math.cos(crankTheta) * r;
+      const py = cy + Math.sin(crankTheta) * r;
+
+      pCtx.strokeStyle = '#64748b';
+      pCtx.lineWidth = 4;
+      pCtx.lineCap = 'round';
+      pCtx.beginPath();
+      pCtx.moveTo(cx, cy);
+      pCtx.lineTo(px, py);
+      pCtx.stroke();
+
+      // 最適力ベクトルガイド
+      const guideLen = r * 0.85;
+      pCtx.strokeStyle = isSweet ? '#34d399' : 'rgba(192, 132, 252, 0.9)';
+      pCtx.lineWidth = isSweet ? 3.0 : 2.2;
+      pCtx.beginPath();
+      pCtx.moveTo(px, py);
+      pCtx.lineTo(px + optTx * guideLen, py + optTy * guideLen);
+      pCtx.stroke();
+
+      pCtx.fillStyle = isSweet ? '#34d399' : 'rgba(192, 132, 252, 0.95)';
+      pCtx.beginPath();
+      pCtx.moveTo(px + optTx * guideLen, py + optTy * guideLen);
+      pCtx.lineTo(px + optTx * guideLen - Math.cos(optAngle - 0.45) * 7.5, py + optTy * guideLen - Math.sin(optAngle - 0.45) * 7.5);
+      pCtx.lineTo(px + optTx * guideLen - Math.cos(optAngle + 0.45) * 7.5, py + optTy * guideLen - Math.sin(optAngle + 0.45) * 7.5);
+      pCtx.closePath();
+      pCtx.fill();
+
+      // ペダルピン
+      pCtx.fillStyle = accentColor;
+      pCtx.strokeStyle = '#ffffff';
+      pCtx.lineWidth = 2;
+      pCtx.beginPath();
+      pCtx.arc(px, py, 6.2, 0, Math.PI * 2);
+      pCtx.fill();
+      pCtx.stroke();
+
+      // ユーザー入力ベクトル
+      if (pedalState.active && pedalState.mag > 0.02) {
+        const ux = cx + pedalState.vx * r;
+        const uy = cy + pedalState.vy * r;
+        const vecColor = pedalState.efficiency > 0.72 ? '#34d399' : (pedalState.efficiency > 0.25 ? '#fbbf24' : '#f43f5e');
+
+        pCtx.strokeStyle = vecColor;
+        pCtx.lineWidth = isSweet ? 4.5 : 3.5;
+        pCtx.beginPath();
+        pCtx.moveTo(cx, cy);
+        pCtx.lineTo(ux, uy);
+        pCtx.stroke();
+
+        const vAngle = Math.atan2(pedalState.vy, pedalState.vx);
+        pCtx.fillStyle = vecColor;
+        pCtx.beginPath();
+        pCtx.moveTo(ux, uy);
+        pCtx.lineTo(ux - Math.cos(vAngle - 0.4) * 10, uy - Math.sin(vAngle - 0.4) * 10);
+        pCtx.lineTo(ux - Math.cos(vAngle + 0.4) * 10, uy - Math.sin(vAngle + 0.4) * 10);
+        pCtx.closePath();
+        pCtx.fill();
+      }
+    }
+
+    /**
+     * ============================================================================
+     * ロードバイクモデル定数 ＆ キャラクター・フレーム描画
+     * ============================================================================
+     */
+    const BIKE = {
+      wheelRadius: 106,
+      rearHub: { x: 136, y: 0 },
+      frontHub: { x: -194, y: 0 },
+      bb: { x: 0, y: 0 },
+      seatTubeTop: { x: 44, y: -144 },
+      seatStayJoin: { x: 36, y: -120 },
+      headTubeTop: { x: -134, y: -162 },
+      headTubeBottom: { x: -150, y: -114 },
+      saddlePos: { x: 58, y: -182 },
+      stemClamp: { x: -156, y: -178 },
+      hoodGrip: { x: -182, y: -178 },
+      crankLength: 50
+    };
+
+    const RIDER = {
+      hip: { x: 60, y: -192 },
+      shoulder: { x: -46, y: -278 },
+      elbow: { x: -108, y: -228 },
+      wrist: { x: -172, y: -178 },
+      neck: { x: -62, y: -292 },
+      thighLen: 116,
+      shinLen: 112
+    };
+
+    function drawBezierCircle(cx, cy, r, style) {
+      const k = 0.5522847498 * r;
+      pen.begin();
+      pen.moveTo(cx, cy - r);
+      pen.bezierTo(cx + k, cy - r, cx + r, cy - k, cx + r, cy);
+      pen.bezierTo(cx + r, cy + k, cx + k, cy + r, cx, cy + r);
+      pen.bezierTo(cx - k, cy + r, cx - r, cy + k, cx - r, cy);
+      pen.bezierTo(cx - r, cy - k, cx - k, cy - r, cx, cy - r);
+      pen.close();
+      pen.paint(style);
+    }
+
+    function drawRoundRectPath(context, x, y, w, h, r) {
+      if (typeof context.roundRect === 'function') {
+        context.roundRect(x, y, w, h, r);
+      } else {
+        context.rect(x, y, w, h);
+      }
+    }
+
+    function drawBackground(w, h, groundY, nextCorner) {
+      const skyGrad = ctx.createLinearGradient(0, 0, 0, groundY);
+      skyGrad.addColorStop(0, '#bae6fd');
+      skyGrad.addColorStop(0.55, '#e0f2fe');
+      skyGrad.addColorStop(1, '#f8fafc');
+      ctx.fillStyle = skyGrad;
+      ctx.fillRect(0, 0, w, groundY);
+
+      // 遠景の山並み
+      ctx.save();
+      ctx.fillStyle = '#cbd5e1';
+      ctx.beginPath();
+      ctx.moveTo(0, groundY);
+      const mPeriod = 600;
+      const mStart = -(game.mountainOffset % mPeriod) - mPeriod;
+      for (let x = mStart; x < w + mPeriod; x += mPeriod) {
+        ctx.lineTo(x, groundY - 95);
+        ctx.bezierCurveTo(x + 120, groundY - 190, x + 220, groundY - 185, x + 320, groundY - 110);
+        ctx.bezierCurveTo(x + 420, groundY - 155, x + 510, groundY - 140, x + 600, groundY - 95);
+      }
+      ctx.lineTo(w, groundY);
+      ctx.closePath();
+      ctx.fill();
+
+      // 中景の丘陵
+      ctx.fillStyle = '#94a3b8';
+      ctx.beginPath();
+      ctx.moveTo(0, groundY);
+      const hPeriod = 420;
+      const hStart = -(game.hillOffset % hPeriod) - hPeriod;
+      for (let x = hStart; x < w + hPeriod; x += hPeriod) {
+        ctx.lineTo(x, groundY - 42);
+        ctx.quadraticCurveTo(x + 110, groundY - 82, x + 220, groundY - 46);
+        ctx.quadraticCurveTo(x + 330, groundY - 22, x + 420, groundY - 42);
+      }
+      ctx.lineTo(w, groundY);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      // 近づくコーナー看板
+      if (nextCorner) {
+        const remainM = nextCorner.dist - game.distance;
+        if (remainM > -15 && remainM < 150) {
+          const signX = w * 0.5 - remainM * 9.5;
+          ctx.save();
+          ctx.translate(signX, groundY);
+          ctx.fillStyle = '#475569';
+          ctx.fillRect(-3, -72, 6, 72);
+          ctx.fillStyle = '#f59e0b';
+          ctx.strokeStyle = '#0f172a';
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          drawRoundRectPath(ctx, -26, -106, 52, 42, 6);
+          ctx.fill();
+          ctx.stroke();
+          ctx.strokeStyle = '#0f172a';
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.moveTo(10, -74);
+          ctx.lineTo(10, -90);
+          ctx.arc(0, -90, 10, 0, Math.PI, true);
+          ctx.lineTo(-10, -76);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
+      // ゴールアーチ
+      const goalRemain = COURSE_LENGTH - game.distance;
+      if (goalRemain > -20 && goalRemain < 140) {
+        const goalX = w * 0.5 - goalRemain * 9.5;
+        ctx.save();
+        ctx.translate(goalX, groundY);
+        ctx.fillStyle = '#1e293b';
+        ctx.fillRect(-8, -220, 16, 220);
+        ctx.fillStyle = '#2563eb';
+        ctx.fillRect(-24, -238, 48, 28);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 12px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('GOAL', 0, -220);
+        ctx.restore();
+      }
+
+      // アスファルト路面
+      const roadGrad = ctx.createLinearGradient(0, groundY, 0, h);
+      roadGrad.addColorStop(0, '#475569');
+      roadGrad.addColorStop(0.18, '#334155');
+      roadGrad.addColorStop(1, '#1e293b');
+      ctx.fillStyle = roadGrad;
+      ctx.fillRect(0, groundY, w, h - groundY);
+
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillRect(0, groundY + 4, w, 4);
+
+      // 流れる白線
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
+      const dashPeriod = 160;
+      const dashStart = (game.roadOffset % dashPeriod) - dashPeriod;
+      for (let x = dashStart; x < w + dashPeriod; x += dashPeriod) {
+        ctx.beginPath();
+        drawRoundRectPath(ctx, x, groundY + 34, 72, 6, 3);
+        ctx.fill();
+      }
+
+      // スピードライン（高速時に強化）
+      if (game.speedMs > 4) {
+        const kmh = game.speedMs * 3.6;
+        const lineCount = kmh > 38 ? 11 : 6;
+        ctx.strokeStyle = `rgba(255, 255, 255, ${Math.min(0.68, game.speedMs / 28)})`;
+        ctx.lineWidth = kmh > 38 ? 2.0 : 1.5;
+        for (let i = 0; i < lineCount; i++) {
+          const ly = groundY - 40 - i * (groundY * 0.082);
+          const speedMult = 1.35 + (i % 3) * 0.3;
+          const lx = ((game.roadOffset * speedMult + i * 240) % (w + 320)) - 160;
+          ctx.beginPath();
+          ctx.moveTo(lx, ly);
+          ctx.lineTo(lx + 75 + (kmh > 38 ? 55 : 25) + (i % 2) * 35, ly);
+          ctx.stroke();
+        }
+      }
+    }
+
+    function drawWheel(hub, rotationAngle, isLocked) {
+      const rOuter = BIKE.wheelRadius;
+      const rTireInner = rOuter - 11;
+      const rRimInner = rOuter - 20;
+      const rHub = 11;
+
+      ctx.save();
+      ctx.translate(hub.x, hub.y);
+
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 1.3;
+      const numSpokes = 20;
+      for (let i = 0; i < numSpokes; i++) {
+        const a1 = rotationAngle + (i / numSpokes) * Math.PI * 2;
+        const a2 = a1 + (i % 2 === 0 ? 0.28 : -0.28);
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a1) * rHub, Math.sin(a1) * rHub);
+        ctx.lineTo(Math.cos(a2) * rRimInner, Math.sin(a2) * rRimInner);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = isLocked ? '#f43f5e' : '#cbd5e1';
+      ctx.lineWidth = isLocked ? 3.5 : 2.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, 28, 0, Math.PI * 2);
+      ctx.stroke();
+
+      drawBezierCircle(0, 0, rOuter, { fill: '#1e242b', stroke: '#0f172a', lineWidth: 2 });
+      drawBezierCircle(0, 0, rTireInner, { fill: '#334155', stroke: '#475569', lineWidth: 1.5 });
+      drawBezierCircle(0, 0, rRimInner, { fill: 'rgba(255,255,255,0.01)', stroke: '#1e293b', lineWidth: 1.8 });
+
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 2.5;
+      for (let i = 0; i < 2; i++) {
+        const startA = rotationAngle + i * Math.PI;
+        ctx.beginPath();
+        ctx.arc(0, 0, rTireInner - 4, startA, startA + 0.65);
+        ctx.stroke();
+      }
+
+      drawBezierCircle(0, 0, rHub, { fill: '#1e293b', stroke: '#94a3b8', lineWidth: 1.5 });
+      drawBezierCircle(0, 0, 4, { fill: '#e2e8f0', stroke: '#334155', lineWidth: 1 });
+
+      if (isLocked) {
+        ctx.strokeStyle = 'rgba(244, 63, 94, 0.9)';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([8, 6]);
+        ctx.beginPath();
+        ctx.arc(0, 0, rOuter + 6, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      ctx.restore();
+    }
+
+    function drawLeg({ hip, crankAngle, isNearSide }) {
+      const theta = -crankAngle;
+      const pedalPin = {
+        x: BIKE.bb.x + Math.cos(theta) * BIKE.crankLength,
+        y: BIKE.bb.y + Math.sin(theta) * BIKE.crankLength
+      };
+
+      const footPitch = Math.sin(theta) * 0.12 - 0.08;
+      const ankle = {
+        x: pedalPin.x + 13 * Math.cos(footPitch) + 11 * Math.sin(footPitch),
+        y: pedalPin.y - 17 * Math.cos(footPitch) + 13 * Math.sin(footPitch)
+      };
+
+      const knee = solve2JointIK(hip, ankle, RIDER.thighLen, RIDER.shinLen, true);
+
+      const skinColor = isNearSide ? '#fde2ce' : '#dfb69b';
+      const skinShade = isNearSide ? '#e8b496' : '#c29376';
+      const bibBlack = isNearSide ? '#222730' : '#171b22';
+      const bibBlue = isNearSide ? '#1d76dc' : '#1455a3';
+      const sockBlue = isNearSide ? '#1d76dc' : '#1455a3';
+
+      if (!isNearSide) {
+        drawCrankArm(pedalPin, '#334155');
+      }
+
+      const thighB = getSegmentBasis(hip, knee);
+      const shinB = getSegmentBasis(knee, ankle);
+
+      const hipF = { x: hip.x + thighB.nx * 24 - thighB.ux * 4, y: hip.y + thighB.ny * 24 - thighB.uy * 4 };
+      const hipB = { x: hip.x - thighB.nx * 27 - thighB.ux * 6, y: hip.y - thighB.ny * 27 - thighB.uy * 6 };
+
+      const cuffRatio = 0.62;
+      const cuffF = {
+        x: hip.x + thighB.ux * (thighB.len * cuffRatio) + thighB.nx * 19.5,
+        y: hip.y + thighB.uy * (thighB.len * cuffRatio) + thighB.ny * 19.5
+      };
+      const cuffB = {
+        x: hip.x + thighB.ux * (thighB.len * cuffRatio) - thighB.nx * 18.5,
+        y: hip.y + thighB.uy * (thighB.len * cuffRatio) - thighB.ny * 18.5
+      };
+
+      const kneeAvgNx = (thighB.nx + shinB.nx) * 0.58;
+      const kneeAvgNy = (thighB.ny + shinB.ny) * 0.58;
+      const kneeFront = { x: knee.x + kneeAvgNx * 14.5, y: knee.y + kneeAvgNy * 14.5 };
+      const kneeBack = { x: knee.x - kneeAvgNx * 12.5, y: knee.y - kneeAvgNy * 12.5 };
+
+      const calfBulge = {
+        x: knee.x + shinB.ux * (shinB.len * 0.35) - shinB.nx * 17.5,
+        y: knee.y + shinB.uy * (shinB.len * 0.35) - shinB.ny * 17.5
+      };
+      const shinMidFront = {
+        x: knee.x + shinB.ux * (shinB.len * 0.45) + shinB.nx * 10.5,
+        y: knee.y + shinB.uy * (shinB.len * 0.45) + shinB.ny * 10.5
+      };
+      const ankleFront = { x: ankle.x + shinB.nx * 7.5, y: ankle.y + shinB.ny * 7.5 };
+      const ankleBack = { x: ankle.x - shinB.nx * 8.0, y: ankle.y - shinB.ny * 8.0 };
+
+      const skinStartF = { x: cuffF.x - thighB.ux * 10, y: cuffF.y - thighB.uy * 10 };
+      const skinStartB = { x: cuffB.x - thighB.ux * 10, y: cuffB.y - thighB.uy * 10 };
+
+      pen.begin();
+      pen.moveTo(skinStartF.x, skinStartF.y);
+      pen.bezierTo(
+        cuffF.x + thighB.ux * 14 + thighB.nx * 1.5, cuffF.y + thighB.uy * 14 + thighB.ny * 1.5,
+        kneeFront.x - thighB.ux * 14 + kneeAvgNx * 2, kneeFront.y - thighB.uy * 14 + kneeAvgNy * 2,
+        kneeFront.x, kneeFront.y
+      );
+      pen.bezierTo(
+        kneeFront.x + shinB.ux * 16, kneeFront.y + shinB.uy * 16,
+        shinMidFront.x + shinB.ux * 22, shinMidFront.y + shinB.uy * 22,
+        ankleFront.x, ankleFront.y
+      );
+      pen.lineTo(ankleBack.x, ankleBack.y);
+      pen.bezierTo(
+        ankleBack.x - shinB.ux * 22 - shinB.nx * 3, ankleBack.y - shinB.uy * 22 - shinB.ny * 3,
+        calfBulge.x + shinB.ux * 20, calfBulge.y + shinB.uy * 20,
+        calfBulge.x, calfBulge.y
+      );
+      pen.bezierTo(
+        calfBulge.x - shinB.ux * 18, calfBulge.y - shinB.uy * 18,
+        kneeBack.x + shinB.ux * 12, kneeBack.y + shinB.uy * 12,
+        kneeBack.x, kneeBack.y
+      );
+      pen.bezierTo(
+        kneeBack.x - thighB.ux * 14, kneeBack.y - thighB.uy * 14,
+        cuffB.x + thighB.ux * 12, cuffB.y + thighB.uy * 12,
+        skinStartB.x, skinStartB.y
+      );
+      pen.close();
+      pen.paint({ fill: skinColor, stroke: '#1e242b', lineWidth: 2 });
+
+      pen.begin();
+      pen.moveTo(kneeFront.x - kneeAvgNx * 5.5, kneeFront.y - kneeAvgNy * 5.5);
+      pen.quadTo(
+        knee.x + kneeAvgNx * 3, knee.y + kneeAvgNy * 3,
+        kneeFront.x + shinB.ux * 14 - shinB.nx * 4.5, kneeFront.y + shinB.uy * 14 - shinB.ny * 4.5
+      );
+      pen.paint({ fill: null, stroke: skinShade, lineWidth: 1.8 });
+
+      // ソックス
+      const sockRatio = 0.66;
+      const sockTopF = {
+        x: knee.x + shinB.ux * (shinB.len * sockRatio) + shinB.nx * 9.0,
+        y: knee.y + shinB.uy * (shinB.len * sockRatio) + shinB.ny * 9.0
+      };
+      const sockTopB = {
+        x: knee.x + shinB.ux * (shinB.len * sockRatio) - shinB.nx * 11.5,
+        y: knee.y + shinB.uy * (shinB.len * sockRatio) - shinB.ny * 11.5
+      };
+
+      pen.begin();
+      pen.moveTo(sockTopF.x, sockTopF.y);
+      pen.quadTo((sockTopF.x + sockTopB.x) * 0.5 - shinB.ux * 3, (sockTopF.y + sockTopB.y) * 0.5 - shinB.uy * 3, sockTopB.x, sockTopB.y);
+      pen.bezierTo(sockTopB.x + shinB.ux * 14, sockTopB.y + shinB.uy * 14, ankleBack.x - shinB.ux * 10, ankleBack.y - shinB.uy * 10, ankleBack.x, ankleBack.y);
+      pen.lineTo(ankleFront.x, ankleFront.y);
+      pen.lineTo(sockTopF.x, sockTopF.y);
+      pen.close();
+      pen.paint({ fill: sockBlue, stroke: '#1e242b', lineWidth: 1.9 });
+
+      pen.begin();
+      pen.moveTo(sockTopF.x + shinB.ux * 3.5, sockTopF.y + shinB.uy * 3.5);
+      pen.quadTo((sockTopF.x + sockTopB.x) * 0.5, (sockTopF.y + sockTopB.y) * 0.5, sockTopB.x + shinB.ux * 3.5, sockTopB.y + shinB.uy * 3.5);
+      pen.paint({ fill: null, stroke: '#ffffff', lineWidth: 3.2 });
+
+      // ビブショーツ
+      pen.begin();
+      pen.moveTo(hipF.x, hipF.y);
+      pen.bezierTo(hipF.x + thighB.ux * 32 + thighB.nx * 3.5, hipF.y + thighB.uy * 32 + thighB.ny * 3.5, cuffF.x - thighB.ux * 22 + thighB.nx * 1.5, cuffF.y - thighB.uy * 22 + thighB.ny * 1.5, cuffF.x, cuffF.y);
+      pen.quadTo((cuffF.x + cuffB.x) * 0.5 + thighB.ux * 4, (cuffF.y + cuffB.y) * 0.5 + thighB.uy * 4, cuffB.x, cuffB.y);
+      pen.bezierTo(cuffB.x - thighB.ux * 24 - thighB.nx * 2, cuffB.y - thighB.uy * 24 - thighB.ny * 2, hipB.x + thighB.ux * 28 - thighB.nx * 5, hipB.y + thighB.uy * 28 - thighB.ny * 5, hipB.x, hipB.y);
+      pen.close();
+      pen.paint({ fill: bibBlack, stroke: '#12161d', lineWidth: 2 });
+
+      const bandDepth = 10;
+      const bandF = { x: cuffF.x - thighB.ux * bandDepth, y: cuffF.y - thighB.uy * bandDepth };
+      const bandB = { x: cuffB.x - thighB.ux * bandDepth, y: cuffB.y - thighB.uy * bandDepth };
+      pen.begin();
+      pen.moveTo(bandF.x, bandF.y);
+      pen.quadTo((bandF.x + bandB.x) * 0.5 + thighB.ux * 4, (bandF.y + bandB.y) * 0.5 + thighB.uy * 4, bandB.x, bandB.y);
+      pen.lineTo(cuffB.x, cuffB.y);
+      pen.quadTo((cuffF.x + cuffB.x) * 0.5 + thighB.ux * 4, (cuffF.y + cuffB.y) * 0.5 + thighB.uy * 4, cuffF.x, cuffF.y);
+      pen.close();
+      pen.paint({ fill: bibBlue, stroke: '#12161d', lineWidth: 1.5 });
+
+      pen.begin();
+      pen.moveTo(bandF.x, bandF.y);
+      pen.quadTo((bandF.x + bandB.x) * 0.5 + thighB.ux * 4, (bandF.y + bandB.y) * 0.5 + thighB.uy * 4, bandB.x, bandB.y);
+      pen.paint({ fill: null, stroke: '#ffffff', lineWidth: 2.5 });
+
+      if (isNearSide) {
+        ctx.save();
+        const midX = (hip.x + cuffF.x + cuffB.x) / 3;
+        const midY = (hip.y + cuffF.y + cuffB.y) / 3;
+        const thighAngle = Math.atan2(thighB.uy, thighB.ux);
+        ctx.translate(midX, midY);
+        ctx.rotate(thighAngle - Math.PI / 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'italic 900 11.5px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('RZONO', 0, 2);
+        ctx.restore();
+      }
+
+      drawCyclingShoe(ankle, footPitch, isNearSide);
+    }
+
+    function drawCyclingShoe(ankle, pitch, isNearSide) {
+      ctx.save();
+      ctx.translate(ankle.x, ankle.y);
+      ctx.rotate(pitch);
+
+      const shoeBlue = isNearSide ? '#1d76dc' : '#14539c';
+      pen.begin();
+      pen.moveTo(-6, -3);
+      pen.bezierTo(-16, 4, -36, 9, -45, 16);
+      pen.bezierTo(-49, 20, -47, 25, -39, 26);
+      pen.bezierTo(-18, 27, 2, 24, 14, 21);
+      pen.bezierTo(20, 19, 20, 6, 12, -2);
+      pen.close();
+      pen.paint({ fill: shoeBlue, stroke: '#11161f', lineWidth: 1.9 });
+
+      pen.begin();
+      pen.moveTo(6, 2);
+      pen.lineTo(14, 0);
+      pen.bezierTo(19, 8, 18, 17, 13, 20);
+      pen.lineTo(5, 21);
+      pen.close();
+      pen.paint({ fill: '#1e2530', stroke: null, lineWidth: 0 });
+
+      pen.begin();
+      pen.moveTo(-43, 24);
+      pen.bezierTo(-22, 27, 0, 24, 15, 20);
+      pen.lineTo(13, 24);
+      pen.bezierTo(-2, 28, -24, 30, -43, 26);
+      pen.close();
+      pen.paint({ fill: '#181e26', stroke: '#0f172a', lineWidth: 1.2 });
+
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 2.8;
+      ctx.beginPath();
+      ctx.moveTo(-10, 3);
+      ctx.lineTo(-3, 15);
+      ctx.moveTo(-20, 6);
+      ctx.lineTo(-14, 17);
+      ctx.moveTo(-30, 10);
+      ctx.lineTo(-25, 19);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    function drawRoadBikeFrame(crankAngle) {
+      const blueFrame = '#1b7ae0';
+      const darkCarbon = '#1e2530';
+
+      pen.begin();
+      pen.moveTo(BIKE.bb.x, BIKE.bb.y - 8);
+      pen.bezierTo(42, -6, 98, -5, BIKE.rearHub.x, BIKE.rearHub.y - 4);
+      pen.lineTo(BIKE.rearHub.x, BIKE.rearHub.y + 4);
+      pen.bezierTo(98, 7, 42, 10, BIKE.bb.x, BIKE.bb.y + 10);
+      pen.close();
+      pen.paint({ fill: darkCarbon, stroke: '#11161f', lineWidth: 2 });
+
+      pen.begin();
+      pen.moveTo(16, 0);
+      pen.quadTo(76, 0, 128, 0);
+      pen.paint({ fill: null, stroke: blueFrame, lineWidth: 3 });
+
+      pen.begin();
+      pen.moveTo(BIKE.seatStayJoin.x + 2, BIKE.seatStayJoin.y);
+      pen.bezierTo(76, -82, 110, -44, BIKE.rearHub.x - 2, BIKE.rearHub.y - 4);
+      pen.lineTo(BIKE.rearHub.x + 4, BIKE.rearHub.y - 2);
+      pen.bezierTo(116, -42, 82, -80, BIKE.seatStayJoin.x + 8, BIKE.seatStayJoin.y + 6);
+      pen.close();
+      pen.paint({ fill: darkCarbon, stroke: '#11161f', lineWidth: 1.8 });
+
+      pen.begin();
+      pen.moveTo(BIKE.seatTubeTop.x - 5, BIKE.seatTubeTop.y);
+      pen.lineTo(BIKE.saddlePos.x - 6, BIKE.saddlePos.y + 5);
+      pen.lineTo(BIKE.saddlePos.x + 6, BIKE.saddlePos.y + 5);
+      pen.lineTo(BIKE.seatTubeTop.x + 7, BIKE.seatTubeTop.y);
+      pen.close();
+      pen.paint({ fill: '#1e242b', stroke: '#0f172a', lineWidth: 1.8 });
+
+      pen.begin();
+      pen.moveTo(BIKE.saddlePos.x - 34, BIKE.saddlePos.y + 2);
+      pen.bezierTo(BIKE.saddlePos.x - 14, BIKE.saddlePos.y - 2, BIKE.saddlePos.x + 14, BIKE.saddlePos.y - 6, BIKE.saddlePos.x + 34, BIKE.saddlePos.y - 7);
+      pen.bezierTo(BIKE.saddlePos.x + 40, BIKE.saddlePos.y - 6, BIKE.saddlePos.x + 38, BIKE.saddlePos.y + 3, BIKE.saddlePos.x + 26, BIKE.saddlePos.y + 5);
+      pen.bezierTo(BIKE.saddlePos.x + 4, BIKE.saddlePos.y + 4, BIKE.saddlePos.x - 18, BIKE.saddlePos.y + 7, BIKE.saddlePos.x - 34, BIKE.saddlePos.y + 5);
+      pen.close();
+      pen.paint({ fill: '#1e242b', stroke: '#0f172a', lineWidth: 1.9 });
+
+      pen.begin();
+      pen.moveTo(BIKE.headTubeBottom.x - 4, BIKE.headTubeBottom.y + 2);
+      pen.bezierTo(-165, -78, -182, -38, BIKE.frontHub.x - 4, BIKE.frontHub.y);
+      pen.lineTo(BIKE.frontHub.x + 5, BIKE.frontHub.y + 2);
+      pen.bezierTo(-172, -36, -156, -76, BIKE.headTubeBottom.x + 10, BIKE.headTubeBottom.y + 6);
+      pen.close();
+      pen.paint({ fill: blueFrame, stroke: '#11161f', lineWidth: 2 });
+
+      pen.begin();
+      pen.moveTo(-167, -60);
+      pen.quadTo(-180, -30, BIKE.frontHub.x - 3, BIKE.frontHub.y);
+      pen.lineTo(BIKE.frontHub.x + 4, BIKE.frontHub.y + 1);
+      pen.quadTo(-171, -28, -160, -56);
+      pen.close();
+      pen.paint({ fill: darkCarbon, stroke: null, lineWidth: 0 });
+
+      pen.begin();
+      pen.moveTo(BIKE.bb.x - 10, BIKE.bb.y - 6);
+      pen.bezierTo(12, -52, 26, -100, BIKE.seatTubeTop.x - 8, BIKE.seatTubeTop.y);
+      pen.lineTo(BIKE.seatTubeTop.x + 10, BIKE.seatTubeTop.y + 2);
+      pen.bezierTo(42, -98, 28, -50, BIKE.bb.x + 12, BIKE.bb.y - 4);
+      pen.close();
+      pen.paint({ fill: darkCarbon, stroke: '#11161f', lineWidth: 2 });
+
+      pen.begin();
+      pen.moveTo(BIKE.bb.x - 12, BIKE.bb.y + 8);
+      pen.bezierTo(-48, -30, -102, -76, BIKE.headTubeBottom.x + 6, BIKE.headTubeBottom.y + 6);
+      pen.bezierTo(BIKE.headTubeBottom.x - 4, BIKE.headTubeBottom.y - 6, BIKE.headTubeTop.x - 6, BIKE.headTubeTop.y + 10, BIKE.headTubeTop.x - 4, BIKE.headTubeTop.y);
+      pen.lineTo(BIKE.headTubeTop.x + 14, BIKE.headTubeTop.y);
+      pen.bezierTo(-78, -158, -14, -150, BIKE.seatTubeTop.x + 8, BIKE.seatTubeTop.y + 2);
+      pen.lineTo(BIKE.seatTubeTop.x + 2, BIKE.seatTubeTop.y + 15);
+      pen.bezierTo(-16, -138, -76, -144, BIKE.headTubeTop.x + 12, BIKE.headTubeTop.y + 15);
+      pen.bezierTo(-90, -68, -44, -26, BIKE.bb.x - 4, BIKE.bb.y - 10);
+      pen.close();
+      pen.paint({ fill: blueFrame, stroke: '#11161f', lineWidth: 2.2 });
+
+      pen.begin();
+      pen.moveTo(BIKE.bb.x - 10, BIKE.bb.y + 6);
+      pen.bezierTo(-42, -26, -90, -66, -128, -102);
+      pen.lineTo(-121, -108);
+      pen.bezierTo(-83, -72, -38, -32, BIKE.bb.x - 5, BIKE.bb.y - 6);
+      pen.close();
+      pen.paint({ fill: darkCarbon, stroke: null, lineWidth: 0 });
+
+      ctx.save();
+      ctx.translate(-70, -54);
+      ctx.rotate(0.67);
+      ctx.fillStyle = '#38bdf8';
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 2.5;
+      ctx.font = 'italic 900 13px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.strokeText('RZONO', 0, 0);
+      ctx.fillText('RZONO', 0, 0);
+      ctx.restore();
+
+      drawWaterBottle();
+      drawHandlebars();
+      drawDrivetrain(crankAngle);
+    }
+
+    function drawWaterBottle() {
+      ctx.save();
+      ctx.translate(-58, -72);
+      ctx.rotate(-0.85);
+      pen.begin();
+      pen.moveTo(-11, 20);
+      pen.lineTo(-11, -14);
+      pen.bezierTo(-11, -20, -7, -23, -6, -25);
+      pen.lineTo(6, -25);
+      pen.bezierTo(7, -23, 11, -20, 11, -14);
+      pen.lineTo(11, 20);
+      pen.quadTo(0, 23, -11, 20);
+      pen.close();
+      pen.paint({ fill: '#f1f5f9', stroke: '#1e293b', lineWidth: 1.7 });
+
+      pen.begin();
+      pen.moveTo(-7, -25);
+      pen.lineTo(-7, -31);
+      pen.lineTo(7, -31);
+      pen.lineTo(7, -25);
+      pen.close();
+      pen.paint({ fill: '#334155', stroke: '#0f172a', lineWidth: 1.5 });
+      ctx.restore();
+    }
+
+    function drawHandlebars() {
+      pen.begin();
+      pen.moveTo(BIKE.headTubeTop.x - 2, BIKE.headTubeTop.y + 2);
+      pen.lineTo(BIKE.stemClamp.x, BIKE.stemClamp.y - 4);
+      pen.lineTo(BIKE.stemClamp.x, BIKE.stemClamp.y + 8);
+      pen.lineTo(BIKE.headTubeTop.x + 2, BIKE.headTubeTop.y + 14);
+      pen.close();
+      pen.paint({ fill: '#1e242b', stroke: '#0f172a', lineWidth: 1.8 });
+
+      pen.begin();
+      pen.moveTo(BIKE.stemClamp.x, BIKE.stemClamp.y + 2);
+      pen.bezierTo(-176, -178, -196, -172, -196, -150);
+      pen.bezierTo(-196, -128, -176, -122, -160, -124);
+      pen.paint({ fill: null, stroke: '#181e26', lineWidth: 7.5 });
+
+      pen.begin();
+      pen.moveTo(-172, -176);
+      pen.bezierTo(-182, -190, -193, -197, -197, -192);
+      pen.bezierTo(-200, -187, -194, -177, -187, -169);
+      pen.close();
+      pen.paint({ fill: '#1e293b', stroke: '#0f172a', lineWidth: 1.7 });
+
+      const leverPull = Math.max(game.leftBrake, game.rightBrake) * 9;
+      pen.begin();
+      pen.moveTo(-191, -171);
+      pen.quadTo(-197 + leverPull * 0.5, -151, -191 + leverPull, -133);
+      pen.paint({ fill: null, stroke: leverPull > 1 ? '#f43f5e' : '#94a3b8', lineWidth: 2.8 });
+    }
+
+    function drawDrivetrain(crankAngle) {
+      const rFront = 24;
+      const rRear = 10 + (7 - game.gearIndex) * 1.1;
+
+      drawBezierCircle(BIKE.rearHub.x, BIKE.rearHub.y, rRear, { fill: '#475569', stroke: '#1e293b', lineWidth: 1.6 });
+
+      pen.begin();
+      pen.moveTo(BIKE.rearHub.x + 2, BIKE.rearHub.y + 8);
+      pen.lineTo(BIKE.rearHub.x + 12, BIKE.rearHub.y + 28);
+      pen.lineTo(BIKE.rearHub.x + 4, BIKE.rearHub.y + 30);
+      pen.close();
+      pen.paint({ fill: '#1e293b', stroke: '#0f172a', lineWidth: 1.5 });
+
+      pen.begin();
+      pen.moveTo(0, -rFront);
+      pen.quadTo(73, -rFront + 4, BIKE.rearHub.x, -rRear);
+      pen.moveTo(0, rFront);
+      pen.quadTo(73, rFront - 3, BIKE.rearHub.x, rRear + 14);
+      pen.paint({ fill: null, stroke: '#334155', lineWidth: 3.2 });
+
+      ctx.save();
+      ctx.strokeStyle = '#cbd5e1';
+      ctx.lineWidth = 1.6;
+      ctx.setLineDash([4, 4]);
+      ctx.lineDashOffset = -(crankAngle * 24);
+      ctx.beginPath();
+      ctx.moveTo(0, -rFront);
+      ctx.lineTo(BIKE.rearHub.x, -rRear);
+      ctx.moveTo(0, rFront);
+      ctx.lineTo(BIKE.rearHub.x, rRear + 14);
+      ctx.stroke();
+      ctx.restore();
+
+      drawBezierCircle(0, 0, rFront, { fill: '#1e242b', stroke: '#0f172a', lineWidth: 2 });
+      drawBezierCircle(0, 0, 14, { fill: '#334155', stroke: '#64748b', lineWidth: 1.4 });
+    }
+
+    function drawCrankArm(pedalPin, color = '#1e242b') {
+      const basis = getSegmentBasis(BIKE.bb, pedalPin);
+      pen.begin();
+      pen.moveTo(BIKE.bb.x + basis.nx * 7, BIKE.bb.y + basis.ny * 7);
+      pen.lineTo(pedalPin.x + basis.nx * 4.5, pedalPin.y + basis.ny * 4.5);
+      pen.lineTo(pedalPin.x - basis.nx * 4.5, pedalPin.y - basis.ny * 4.5);
+      pen.lineTo(BIKE.bb.x - basis.nx * 7, BIKE.bb.y - basis.ny * 7);
+      pen.close();
+      pen.paint({ fill: color, stroke: '#0f172a', lineWidth: 1.8 });
+    }
+
+    function drawCyclistUpperBody(crankAngle) {
+      const bobY = Math.sin(crankAngle * 2) * (game.crankOmega > 0.2 ? 2.1 : 0.3);
+      const swayX = Math.cos(crankAngle) * (game.crankOmega > 0.2 ? 1.2 : 0.2);
+
+      // 動的シルエット：スプリント時は低くエアロ前傾、強ブレーキ時は腰を引いて踏ん張る
+      const leanX = -game.riderLean * 12;
+      const leanY = game.riderLean > 0 ? game.riderLean * 14 : -game.riderLean * 5;
+      const hipShiftX = game.riderLean < 0 ? -game.riderLean * 10 : 0;
+
+      const hip = { x: RIDER.hip.x + hipShiftX, y: RIDER.hip.y + bobY * 0.35 };
+      const shoulder = { x: RIDER.shoulder.x + swayX + leanX, y: RIDER.shoulder.y + bobY + leanY };
+      const elbow = { x: RIDER.elbow.x + swayX * 0.5 + leanX * 0.5, y: RIDER.elbow.y + bobY * 0.5 + leanY * 0.65 };
+      const wrist = RIDER.wrist;
+      const neck = { x: RIDER.neck.x + swayX + leanX * 1.1, y: RIDER.neck.y + bobY + leanY * 1.1 };
+
+      const upArmB = getSegmentBasis(shoulder, elbow);
+      const foreArmB = getSegmentBasis(elbow, wrist);
+      pen.begin();
+      pen.moveTo(shoulder.x - 10 + upArmB.nx * 7, shoulder.y + upArmB.ny * 7);
+      pen.quadTo(elbow.x - 10 + upArmB.nx * 6, elbow.y + upArmB.ny * 6, wrist.x - 8 + foreArmB.nx * 5, wrist.y + foreArmB.ny * 5);
+      pen.lineTo(wrist.x - 6 - foreArmB.nx * 5, wrist.y - foreArmB.ny * 5);
+      pen.quadTo(elbow.x - 8 - upArmB.nx * 6, elbow.y - upArmB.ny * 6, shoulder.x - 4 - upArmB.nx * 8, shoulder.y - upArmB.ny * 8);
+      pen.close();
+      pen.paint({ fill: '#d6ac90', stroke: '#1e242b', lineWidth: 1.6 });
+
+      const neckFront = { x: neck.x - 4, y: neck.y + 11 };
+      const neckBack = { x: neck.x + 13, y: neck.y + 1 };
+      const chestApex = { x: shoulder.x - 13, y: shoulder.y + 34 };
+      const waistFront = { x: hip.x - 32, y: hip.y - 16 };
+      const hipFront = { x: hip.x - 24, y: hip.y - 1 };
+      const hipBack = { x: hip.x + 30, y: hip.y + 4 };
+      const waistBack = { x: hip.x + 22, y: hip.y - 24 };
+      const backMid = { x: (shoulder.x + hip.x) * 0.5 + 15, y: (shoulder.y + hip.y) * 0.5 - 24 };
+
+      pen.begin();
+      pen.moveTo(waistFront.x, waistFront.y);
+      pen.lineTo(hipFront.x, hipFront.y);
+      pen.bezierTo(hip.x - 4, hip.y + 13, hip.x + 22, hip.y + 13, hipBack.x, hipBack.y);
+      pen.bezierTo(hipBack.x + 5, hipBack.y - 12, waistBack.x + 4, waistBack.y + 10, waistBack.x, waistBack.y);
+      pen.close();
+      pen.paint({ fill: '#222730', stroke: '#12161d', lineWidth: 2 });
+
+      pen.begin();
+      pen.moveTo(neckFront.x, neckFront.y);
+      pen.bezierTo(shoulder.x - 12, shoulder.y + 14, chestApex.x - 3, chestApex.y - 8, chestApex.x, chestApex.y);
+      pen.bezierTo(chestApex.x + 9, chestApex.y + 14, waistFront.x - 8, waistFront.y - 14, waistFront.x, waistFront.y);
+      pen.lineTo(waistBack.x, waistBack.y);
+      pen.bezierTo(waistBack.x - 2, waistBack.y - 16, backMid.x + 12, backMid.y + 16, backMid.x, backMid.y);
+      pen.bezierTo(backMid.x - 14, backMid.y - 18, neckBack.x + 13, neckBack.y + 10, neckBack.x, neckBack.y);
+      pen.close();
+      pen.paint({ fill: '#1e2530', stroke: '#12161d', lineWidth: 2.1 });
+
+      // ホワイト＆ブルーパネル
+      pen.begin();
+      pen.moveTo(neckFront.x, neckFront.y);
+      pen.lineTo(neckBack.x, neckBack.y);
+      pen.bezierTo(neckBack.x + 13, neckBack.y + 10, backMid.x - 14, backMid.y - 18, backMid.x - 4, backMid.y - 4);
+      pen.lineTo(shoulder.x + 8, shoulder.y + 16);
+      pen.lineTo(neckFront.x + 2, neckFront.y + 6);
+      pen.close();
+      pen.paint({ fill: '#ffffff', stroke: '#1e293b', lineWidth: 1.4 });
+
+      pen.begin();
+      pen.moveTo(neckFront.x, neckFront.y);
+      pen.bezierTo(shoulder.x - 12, shoulder.y + 14, chestApex.x - 3, chestApex.y - 8, chestApex.x, chestApex.y);
+      pen.bezierTo(chestApex.x + 5, chestApex.y + 8, chestApex.x + 10, chestApex.y + 12, chestApex.x + 13, chestApex.y + 13);
+      pen.lineTo(shoulder.x + 6, shoulder.y + 16);
+      pen.close();
+      pen.paint({ fill: '#2889f0', stroke: '#1e293b', lineWidth: 1.4 });
+
+      pen.begin();
+      pen.moveTo(backMid.x - 4, backMid.y - 4);
+      pen.bezierTo(backMid.x + 6, backMid.y + 8, waistBack.x - 4, waistBack.y - 14, waistBack.x - 2, waistBack.y - 8);
+      pen.lineTo(waistBack.x - 18, waistBack.y - 14);
+      pen.lineTo(shoulder.x + 14, shoulder.y + 18);
+      pen.close();
+      pen.paint({ fill: '#f8fafc', stroke: '#1e293b', lineWidth: 1.4 });
+
+      pen.begin();
+      pen.moveTo(waistFront.x + 2, waistFront.y - 4);
+      pen.lineTo(waistFront.x, waistFront.y);
+      pen.lineTo(waistBack.x, waistBack.y);
+      pen.lineTo(waistBack.x - 2, waistBack.y - 8);
+      pen.close();
+      pen.paint({ fill: '#38bdf8', stroke: '#1e293b', lineWidth: 1.4 });
+
+      ctx.save();
+      ctx.translate((shoulder.x + hip.x) * 0.5 + 1, (shoulder.y + hip.y) * 0.5 + 5);
+      ctx.rotate(0.66);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'italic 900 12.5px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('RZONO', 0, 0);
+      ctx.restore();
+
+      drawHeadAndHelmet(neck, crankAngle);
+      drawRightArm(shoulder, elbow, wrist);
+    }
+
+    function drawRightArm(shoulder, elbow, wrist) {
+      const upArmB = getSegmentBasis(shoulder, elbow);
+      const foreArmB = getSegmentBasis(elbow, wrist);
+
+      const shTop = { x: shoulder.x + upArmB.nx * 11.5, y: shoulder.y + upArmB.ny * 11.5 };
+      const shBot = { x: shoulder.x - upArmB.nx * 12.0, y: shoulder.y - upArmB.ny * 12.0 };
+      const elTop = { x: elbow.x + (upArmB.nx + foreArmB.nx) * 4.8, y: elbow.y + (upArmB.ny + foreArmB.ny) * 4.8 };
+      const elBot = { x: elbow.x - (upArmB.nx + foreArmB.nx) * 5.0, y: elbow.y - (upArmB.ny + foreArmB.ny) * 5.0 };
+      const wrTop = { x: wrist.x + foreArmB.nx * 5.5, y: wrist.y + foreArmB.ny * 5.5 };
+      const wrBot = { x: wrist.x - foreArmB.nx * 5.8, y: wrist.y - foreArmB.ny * 5.8 };
+
+      pen.begin();
+      pen.moveTo(shTop.x, shTop.y);
+      pen.bezierTo(shTop.x + upArmB.ux * 26 + upArmB.nx * 1.5, shTop.y + upArmB.uy * 26 + upArmB.ny * 1.5, elTop.x - upArmB.ux * 20, elTop.y - upArmB.uy * 20, elTop.x, elTop.y);
+      pen.bezierTo(elTop.x + foreArmB.ux * 24 + foreArmB.nx * 1.2, elTop.y + foreArmB.uy * 24 + foreArmB.ny * 1.2, wrTop.x - foreArmB.ux * 20, wrTop.y - foreArmB.uy * 20, wrTop.x, wrTop.y);
+      pen.lineTo(wrBot.x, wrBot.y);
+      pen.bezierTo(wrBot.x - foreArmB.ux * 22 - foreArmB.nx * 2.5, wrBot.y - foreArmB.uy * 22 - foreArmB.ny * 2.5, elBot.x + foreArmB.ux * 24 - foreArmB.nx * 2.5, elBot.y + foreArmB.uy * 24 - foreArmB.ny * 2.5, elBot.x, elBot.y);
+      pen.bezierTo(elBot.x - upArmB.ux * 20 - upArmB.nx * 2, elBot.y - upArmB.uy * 20 - upArmB.ny * 2, shBot.x + upArmB.ux * 26 - upArmB.nx * 2, shBot.y + upArmB.uy * 26 - upArmB.ny * 2, shBot.x, shBot.y);
+      pen.close();
+      pen.paint({ fill: '#fde2ce', stroke: '#1e242b', lineWidth: 2 });
+
+      const sleeveRatio = 0.50;
+      const sleeveEndTop = { x: shoulder.x + upArmB.ux * (upArmB.len * sleeveRatio) + upArmB.nx * 10.5, y: shoulder.y + upArmB.uy * (upArmB.len * sleeveRatio) + upArmB.ny * 10.5 };
+      const sleeveEndBot = { x: shoulder.x + upArmB.ux * (upArmB.len * sleeveRatio) - upArmB.nx * 11.0, y: shoulder.y + upArmB.uy * (upArmB.len * sleeveRatio) - upArmB.ny * 11.0 };
+
+      pen.begin();
+      pen.moveTo(shTop.x - upArmB.ux * 5, shTop.y - upArmB.uy * 5);
+      pen.bezierTo(shoulder.x - upArmB.ux * 16 + upArmB.nx * 7, shoulder.y - upArmB.uy * 16 + upArmB.ny * 7, shoulder.x - upArmB.ux * 11 - upArmB.nx * 15, shoulder.y - upArmB.uy * 11 - upArmB.ny * 15, shBot.x - upArmB.ux * 2, shBot.y - upArmB.uy * 2);
+      pen.lineTo(sleeveEndBot.x, sleeveEndBot.y);
+      pen.quadTo((sleeveEndTop.x + sleeveEndBot.x) * 0.5 + upArmB.ux * 3, (sleeveEndTop.y + sleeveEndBot.y) * 0.5 + upArmB.uy * 3, sleeveEndTop.x, sleeveEndTop.y);
+      pen.close();
+      pen.paint({ fill: '#1d76dc', stroke: '#12161d', lineWidth: 2 });
+
+      pen.begin();
+      pen.moveTo(sleeveEndTop.x, sleeveEndTop.y);
+      pen.lineTo(sleeveEndBot.x, sleeveEndBot.y);
+      pen.paint({ fill: null, stroke: '#1e242b', lineWidth: 4.5 });
+
+      pen.begin();
+      pen.moveTo(sleeveEndTop.x - upArmB.ux * 4.0, sleeveEndTop.y - upArmB.uy * 4.0);
+      pen.lineTo(sleeveEndBot.x - upArmB.ux * 4.0, sleeveEndBot.y - upArmB.uy * 4.0);
+      pen.paint({ fill: null, stroke: '#ffffff', lineWidth: 3.0 });
+
+      pen.begin();
+      pen.moveTo(wrTop.x, wrTop.y);
+      pen.bezierTo(wrTop.x - 10, wrTop.y - 7, wrTop.x - 21, wrTop.y - 2, wrTop.x - 22, wrTop.y + 8);
+      pen.bezierTo(wrBot.x - 16, wrBot.y + 9, wrBot.x - 4, wrBot.y + 6, wrBot.x, wrBot.y);
+      pen.close();
+      pen.paint({ fill: '#1d76dc', stroke: '#12161d', lineWidth: 1.9 });
+    }
+
+    function drawHeadAndHelmet(neck, crankAngle) {
+      const hx = neck.x - 15;
+      const hy = neck.y - 31;
+
+      pen.begin();
+      pen.moveTo(neck.x - 5, neck.y + 12);
+      pen.lineTo(hx - 2, hy + 13);
+      pen.lineTo(hx + 16, hy + 8);
+      pen.lineTo(neck.x + 13, neck.y + 3);
+      pen.close();
+      pen.paint({ fill: '#f7d4bc', stroke: '#1e242b', lineWidth: 1.9 });
+
+      const speedFactor = Math.min(1.5, game.speedMs / 10);
+      const windWave1 = Math.sin(crankAngle * 2) * (3 + speedFactor * 3);
+      const windWave2 = Math.cos(crankAngle * 2 - 0.7) * (4 + speedFactor * 5);
+      const ponyRoot = { x: hx + 24, y: hy - 6 };
+      const ponyTip = { x: ponyRoot.x + 56, y: ponyRoot.y + 20 + windWave2 - speedFactor * 6 };
+
+      drawBezierCircle(ponyRoot.x, ponyRoot.y, 4.5, { fill: '#1e293b', stroke: '#0f172a', lineWidth: 1.4 });
+
+      pen.begin();
+      pen.moveTo(ponyRoot.x + 1, ponyRoot.y - 4.5);
+      pen.bezierTo(ponyRoot.x + 22, ponyRoot.y - 13 + windWave1, ponyRoot.x + 42, ponyRoot.y + 4 + windWave2 * 0.7, ponyTip.x, ponyTip.y);
+      pen.bezierTo(ponyRoot.x + 41, ponyRoot.y + 23 + windWave2 * 0.8, ponyRoot.x + 18, ponyRoot.y + 16 + windWave1, ponyRoot.x, ponyRoot.y + 4.5);
+      pen.close();
+      pen.paint({ fill: '#664233', stroke: '#1e1612', lineWidth: 2 });
+
+      pen.begin();
+      pen.moveTo(hx - 15, hy - 11);
+      pen.quadraticCurveTo(hx - 15.5, hy - 5, hx - 16, hy - 1);
+      pen.quadraticCurveTo(hx - 19, hy + 3, hx - 21.5, hy + 6);
+      pen.quadraticCurveTo(hx - 18.5, hy + 7.5, hx - 16.5, hy + 8.5);
+      pen.quadraticCurveTo(hx - 18, hy + 10.5, hx - 17.5, hy + 11.8);
+      pen.quadraticCurveTo(hx - 17, hy + 13.5, hx - 16, hy + 14.8);
+      pen.bezierTo(hx - 15, hy + 20.5, hx - 6, hy + 22, hx + 5, hy + 16);
+      pen.lineTo(hx + 15, hy + 4);
+      pen.close();
+      pen.paint({ fill: '#fde2ce', stroke: '#1e242b', lineWidth: 1.9 });
+
+      pen.begin();
+      pen.moveTo(hx - 14, hy - 12);
+      pen.bezierTo(hx - 2, hy - 16, hx + 18, hy - 14, hx + 25, hy - 2);
+      pen.bezierTo(hx + 24, hy + 10, hx + 15, hy + 16, hx + 9, hy + 15);
+      pen.lineTo(hx + 5, hy + 2);
+      pen.lineTo(hx - 2, hy + 11);
+      pen.lineTo(hx - 6, hy - 4);
+      pen.close();
+      pen.paint({ fill: '#664233', stroke: '#1e1612', lineWidth: 1.8 });
+
+      pen.begin();
+      pen.moveTo(hx - 1, hy - 4);
+      pen.lineTo(hx - 3, hy + 20.5);
+      pen.lineTo(hx + 4, hy + 17.5);
+      pen.lineTo(hx + 10, hy - 2);
+      pen.paint({ fill: null, stroke: '#1e242b', lineWidth: 2.3 });
+
+      pen.begin();
+      pen.moveTo(hx - 18.5, hy - 5.5);
+      pen.lineTo(hx - 4.5, hy - 6.5);
+      pen.lineTo(hx - 6.5, hy + 4.5);
+      pen.quadTo(hx - 15.5, hy + 5.5, hx - 18.5, hy + 1.5);
+      pen.close();
+      pen.paint({ fill: 'rgba(37, 99, 235, 0.82)', stroke: '#ffffff', lineWidth: 1.9 });
+
+      // サングラス光沢ハイライト
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.72)';
+      ctx.lineWidth = 2.0;
+      ctx.beginPath();
+      ctx.moveTo(hx - 14.5, hy - 4);
+      ctx.lineTo(hx - 10, hy + 3);
+      ctx.stroke();
+      ctx.restore();
+
+      pen.begin();
+      pen.moveTo(hx - 4.5, hy - 5.5);
+      pen.quadTo(hx + 5, hy - 7.5, hx + 14, hy - 4.5);
+      pen.paint({ fill: null, stroke: '#ffffff', lineWidth: 2.8 });
+
+      pen.begin();
+      pen.moveTo(hx - 21, hy - 10);
+      pen.bezierTo(hx - 22, hy - 29, hx + 2, hy - 37, hx + 24, hy - 27);
+      pen.bezierTo(hx + 34, hy - 20, hx + 33, hy - 8, hx + 26, hy - 2);
+      pen.bezierTo(hx + 12, hy - 5, hx - 4, hy - 11, hx - 21, hy - 10);
+      pen.close();
+      pen.paint({ fill: '#1d76dc', stroke: '#0f172a', lineWidth: 2.1 });
+
+      pen.begin();
+      pen.moveTo(hx - 18, hy - 14);
+      pen.bezierTo(hx - 5, hy - 25, hx + 15, hy - 26, hx + 28, hy - 14);
+      pen.lineTo(hx + 26, hy - 7);
+      pen.bezierTo(hx + 12, hy - 17, hx - 4, hy - 17, hx - 19, hy - 11);
+      pen.close();
+      pen.paint({ fill: '#1e242b', stroke: null, lineWidth: 0 });
+
+      // ヘルメットのシルバーライン＆通気孔
+      pen.begin();
+      pen.moveTo(hx - 15, hy - 18);
+      pen.bezierTo(hx - 2, hy - 28, hx + 14, hy - 28, hx + 25, hy - 18);
+      pen.paint({ fill: null, stroke: '#e2e8f0', lineWidth: 2.1 });
+
+      pen.begin();
+      pen.moveTo(hx - 7, hy - 21);
+      pen.quadTo(hx + 5, hy - 24, hx + 15, hy - 19);
+      pen.quadTo(hx + 5, hy - 17, hx - 7, hy - 21);
+      pen.close();
+      pen.paint({ fill: '#0f172a', stroke: '#94a3b8', lineWidth: 1 });
+
+      // 高ケイデンス・高負荷時の汗しぶき
+      if (game.phase === 'playing' && (game.crankOmega > 8.5 || game.stallShake > 0.3)) {
+        if (Math.random() < 0.14) {
+          game.sweatDrops.push({
+            x: hx - 8 + Math.random() * 12,
+            y: hy + 2 + Math.random() * 8,
+            vx: 35 + Math.random() * 35,
+            vy: -20 - Math.random() * 25,
+            life: 1.0
+          });
+        }
+      }
+    }
+
+    /**
+     * ============================================================================
+     * 物理演算（ペダル抵抗・トルク閾値・左右アナログブレーキ・ロック転倒・カーブ判定）
+     * ============================================================================
+     */
+    function getRequiredForceRatio() {
+      const gear = GEARS[game.gearIndex];
+      const wheelCircumference = 2.10;
+      const syncCrankOmega = (game.speedMs / wheelCircumference) * (Math.PI * 2) / gear.ratio;
+      const staticLoad = 0.14 + Math.pow(gear.ratio / 2.2, 2.35) * 0.24;
+      const speedRelief = Math.min(staticLoad * 0.45, syncCrankOmega * 0.035);
+      return Math.max(0.16, staticLoad - speedRelief);
+    }
+
+    function triggerGameOver(reasonTitle, reasonDesc) {
+      game.phase = 'gameover';
+      game.cameraShake = 14;
+      playCrashSound();
+      dangerVignette.style.opacity = '0';
+      modalBadgeIcon.textContent = '💥';
+      modalBadgeIcon.className = 'w-[6.5cqw] h-[6.5cqw] rounded-[1.8cqw] bg-gradient-to-br from-rose-600 to-orange-500 flex items-center justify-center text-[3.5cqw] shadow-lg shrink-0';
+      modalSubtitle.textContent = 'GAME OVER';
+      modalSubtitle.className = 'text-[1.5cqw] font-extrabold uppercase tracking-wider text-rose-400';
+      modalTitle.textContent = reasonTitle;
+      modalDescription.innerHTML = reasonDesc;
+      modalRulesBox.classList.add('hidden');
+      modalResultStats.classList.remove('hidden');
+      shareXBtn.classList.add('hidden');
+      resultTimeText.textContent = formatTime(game.elapsedTime);
+      resultMaxSpeedText.textContent = `${game.maxSpeedKmh.toFixed(1)} km/h`;
+      startRaceBtn.textContent = 'リトライする';
+      overlayModal.classList.remove('hidden');
+    }
+
+    function triggerGoal() {
+      game.phase = 'goal';
+      dangerVignette.style.opacity = '0';
+      playGoalFanfare();
+      const colors = ['#38bdf8', '#fbbf24', '#34d399', '#f43f5e', '#c084fc', '#ffffff'];
+      for (let i = 0; i < 70; i++) {
+        game.confetti.push({
+          x: Math.random(),
+          y: -0.05 - Math.random() * 0.3,
+          vx: (Math.random() - 0.5) * 0.25,
+          vy: 0.22 + Math.random() * 0.35,
+          rot: Math.random() * Math.PI * 2,
+          vRot: (Math.random() - 0.5) * 10,
+          size: 0.012 + Math.random() * 0.012,
+          color: colors[i % colors.length]
+        });
+      }
+      modalBadgeIcon.textContent = '🏆';
+      modalBadgeIcon.className = 'w-[6.5cqw] h-[6.5cqw] rounded-[1.8cqw] bg-gradient-to-br from-emerald-500 to-teal-400 flex items-center justify-center text-[3.5cqw] shadow-lg shrink-0';
+      modalSubtitle.textContent = 'COURSE CLEAR!';
+      modalSubtitle.className = 'text-[1.5cqw] font-extrabold uppercase tracking-wider text-emerald-400';
+      modalTitle.textContent = 'ゴール達成！おめでとう！';
+      modalDescription.innerHTML = `全5つのテクニカルコーナーをクリアし、<strong class="text-white">1,200m</strong> を完走しました！`;
+      modalRulesBox.classList.add('hidden');
+      modalResultStats.classList.remove('hidden');
+      shareXBtn.classList.remove('hidden');
+      resultTimeText.textContent = formatTime(game.elapsedTime);
+      resultMaxSpeedText.textContent = `${game.maxSpeedKmh.toFixed(1)} km/h`;
+      startRaceBtn.textContent = 'もう一度アタックする';
+      overlayModal.classList.remove('hidden');
+    }
+
+    function shareScoreOnX() {
+      const timeStr = formatTime(game.elapsedTime);
+      const maxKmhStr = game.maxSpeedKmh.toFixed(1);
+      const postText = `🚴‍♀️ 坂道輪の ロードバイク・タイムアタックを完走！\n⏱ 記録タイム: ${timeStr}\n💨 最高速度: ${maxKmhStr} km/h\n#坂道輪のロードバイク・タイムアタック`;
+      const shareUrl = `https://x.com/intent/tweet?text=${encodeURIComponent(postText)}`;
+      window.open(shareUrl, '_blank', 'noopener,noreferrer');
+    }
+
+    shareXBtn.addEventListener('click', shareScoreOnX);
+
+    function formatTime(sec) {
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      const cs = Math.floor((sec * 100) % 100);
+      return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+    }
+
+    function updatePhysics(dt) {
+      // スタート前カウントダウン (3 -> 2 -> 1 -> GO!!)
+      if (game.phase === 'countdown') {
+        game.countdownTimer -= dt;
+        if (game.countdownTimer <= 0) {
+          game.countdownVal--;
+          if (game.countdownVal > 0) {
+            game.countdownTimer = 0.68;
+            countdownText.textContent = `${game.countdownVal}`;
+            countdownText.className = 'countdown-pop text-[14cqw] font-black italic text-white drop-shadow-[0_0.8cqw_2cqw_rgba(15,23,42,0.85)]';
+            void countdownText.offsetWidth;
+            playCountdownSound(false);
+          } else {
+            game.phase = 'playing';
+            countdownText.textContent = 'GO!!';
+            countdownText.className = 'countdown-pop text-[15cqw] font-black italic text-emerald-400 drop-shadow-[0_0.8cqw_2cqw_rgba(15,23,42,0.9)]';
+            void countdownText.offsetWidth;
+            playCountdownSound(true);
+            setTimeout(() => countdownLayer.classList.add('hidden'), 720);
+          }
+        }
+        return;
+      }
+
+      if (game.cameraShake > 0) {
+        game.cameraShake = Math.max(0, game.cameraShake - dt * 28);
+      }
+
+      if (game.phase === 'gameover' && game.crashAngle > -1.35) {
+        game.crashAngle = Math.max(-1.35, game.crashAngle - dt * 3.8);
+        game.crashOffsetY = Math.min(82, game.crashOffsetY + dt * 210);
+        return;
+      }
+      if (game.phase !== 'playing') return;
+
+      game.elapsedTime += dt;
+      const gear = GEARS[game.gearIndex];
+      const reqForce = getRequiredForceRatio();
+
+      // 1. 左右独立ペダリング接線トルク計算（180度逆位相）
+      const thetaR = -game.crankAngle;
+      const thetaL = thetaR + Math.PI;
+
+      const tanRx = Math.sin(thetaR);
+      const tanRy = -Math.cos(thetaR);
+      const tanLx = Math.sin(thetaL);
+      const tanLy = -Math.cos(thetaL);
+
+      const dotR = game.rightPedal.vx * tanRx + game.rightPedal.vy * tanRy;
+      const dotL = game.leftPedal.vx * tanLx + game.leftPedal.vy * tanLy;
+
+      const effR = game.rightPedal.active && game.rightPedal.mag > 0.05 ? Math.max(0, dotR / game.rightPedal.mag) : 0;
+      const effL = game.leftPedal.active && game.leftPedal.mag > 0.05 ? Math.max(0, dotL / game.leftPedal.mag) : 0;
+      game.rightPedal.efficiency = effR;
+      game.leftPedal.efficiency = effL;
+
+      const totalEffectiveForce = Math.max(0, dotR) + Math.max(0, dotL);
+
+      // 2. 抵抗との比較
+      let netTorque = 0;
+      let isStalling = false;
+      if (totalEffectiveForce > reqForce) {
+        netTorque = (totalEffectiveForce - reqForce) * 34;
+        stallWarningText.textContent = '加速中！';
+        stallWarningText.className = 'text-emerald-400';
+      } else if (totalEffectiveForce > 0.05) {
+        isStalling = true;
+        stallWarningText.textContent = reqForce > 1.0 ? 'ギア重すぎ！回転不能' : 'トルク不足（シフトダウン推奨）';
+        stallWarningText.className = 'text-rose-400';
+      } else {
+        stallWarningText.textContent = reqForce > 1.0 ? 'ギア高すぎ（要シフトダウン）' : '惰性走行中';
+        stallWarningText.className = 'text-slate-400';
+      }
+
+      game.stallShake += ((isStalling ? 1 : 0) - game.stallShake) * Math.min(1, dt * 12);
+      const isSweetPedaling = netTorque > 8 && (effR > 0.75 || effL > 0.75);
+      game.sweetSpotGlow += ((isSweetPedaling ? 1 : 0) - game.sweetSpotGlow) * Math.min(1, dt * 10);
+      if (isSweetPedaling && Math.random() < 0.45) {
+        const pTheta = effR >= effL ? thetaR : thetaL;
+        game.windParticles.push({
+          x: Math.cos(pTheta) * BIKE.crankLength,
+          y: Math.sin(pTheta) * BIKE.crankLength,
+          vx: 140 + Math.random() * 110,
+          vy: (Math.random() - 0.5) * 45,
+          life: 1.0,
+          color: effR >= effL ? '#38bdf8' : '#fbbf24'
+        });
+      }
+
+      const crankInertia = 1.65 + gear.ratio * 0.25;
+      const crankDamping = 2.4;
+      game.crankOmega += ((netTorque - game.crankOmega * crankDamping) / crankInertia) * dt;
+      game.crankOmega = Math.max(0, Math.min(game.crankOmega, 14.5));
+
+      const wheelCircumference = 2.10;
+      const crankRps = game.crankOmega / (Math.PI * 2);
+      const targetDriveSpeed = crankRps * gear.ratio * wheelCircumference;
+
+      if (targetDriveSpeed > game.speedMs) {
+        const accel = (targetDriveSpeed - game.speedMs) * (2.6 / Math.sqrt(gear.ratio));
+        game.speedMs += accel * dt;
+      } else {
+        const aeroDrag = 0.0042 * game.speedMs * game.speedMs;
+        const rollingDrag = 0.14;
+        game.speedMs = Math.max(0, game.speedMs - (aeroDrag + rollingDrag) * dt);
+      }
+
+      // 3. 左右独立アナログブレーキ＆タイヤロック物理
+      const speedFactor = Math.max(0.35, Math.min(1.2, game.speedMs / 10));
+      const rearLockThreshold = 0.76 + (1 - speedFactor) * 0.14;
+      const frontLockThreshold = 0.68 + (1 - speedFactor) * 0.14;
+
+      game.rearLocked = game.speedMs > 1.2 && game.leftBrake > rearLockThreshold;
+      game.frontLocked = game.speedMs > 1.2 && game.rightBrake > frontLockThreshold;
+
+      const brakeIntensity = Math.min(1, game.leftBrake * 0.6 + game.rightBrake * 0.9);
+      const targetPitch = game.speedMs > 1.0 ? (-brakeIntensity * 0.048 + (netTorque > 12 ? 0.012 : 0)) : 0;
+      game.bikePitch += (targetPitch - game.bikePitch) * Math.min(1, dt * 10);
+
+      const targetLean = brakeIntensity > 0.15 ? -brakeIntensity : Math.min(1, netTorque / 26);
+      game.riderLean += (targetLean - game.riderLean) * Math.min(1, dt * 7);
+
+      if (game.rearLocked) {
+        game.rearLockGauge = Math.min(1, game.rearLockGauge + dt * 1.15);
+      } else {
+        game.rearLockGauge = Math.max(0, game.rearLockGauge - dt * 1.8);
+      }
+
+      if (game.frontLocked) {
+        game.frontLockGauge = Math.min(1, game.frontLockGauge + dt * 1.55);
+      } else {
+        game.frontLockGauge = Math.max(0, game.frontLockGauge - dt * 1.8);
+      }
+
+      const maxLock = Math.max(game.rearLockGauge, game.frontLockGauge);
+      dangerVignette.style.opacity = (game.rearLocked || game.frontLocked) ? `${Math.min(1, 0.35 + maxLock * 0.65)}` : `${maxLock * 0.35}`;
+
+      if (game.rearLocked || game.frontLocked) {
+        game.cameraShake = Math.max(game.cameraShake, 2.8 + maxLock * 5.0);
+        if (game.elapsedTime - game.lastSkidBeep > 0.16) {
+          game.lastSkidBeep = game.elapsedTime;
+          if (game.audioReady && game.skidNoise) {
+            try { game.skidNoise.triggerAttackRelease('32n', Tone.now() + 0.005); } catch (e) {}
+          }
+        }
+      }
+
+      if (game.rearLocked) {
+        game.skidParticles.push({ x: BIKE.rearHub.x, y: BIKE.wheelRadius, vx: 60 + Math.random() * 40, vy: -15 - Math.random() * 20, life: 1 });
+      }
+      if (game.frontLocked) {
+        game.skidParticles.push({ x: BIKE.frontHub.x, y: BIKE.wheelRadius, vx: 60 + Math.random() * 40, vy: -15 - Math.random() * 20, life: 1 });
+      }
+
+      if (game.rearLockGauge >= 1.0) {
+        triggerGameOver(
+          '後輪ロックによるスリップ転倒！',
+          '左ブレーキ（リア）を強く引きすぎて後輪がロックし続け、リアが滑って転倒しました。ロックしたら一度レバーを緩めましょう。'
+        );
+        return;
+      }
+      if (game.frontLockGauge >= 1.0) {
+        triggerGameOver(
+          '前輪ロックによるジャックナイフ転倒！',
+          '右ブレーキ（フロント）を急激に引きすぎて前輪がロックし、前転してしまいました。前後バランスよくポンピングブレーキを使いましょう。'
+        );
+        return;
+      }
+
+      const rearDecel = game.rearLocked ? 4.2 : game.leftBrake * 8.5;
+      const frontDecel = game.frontLocked ? 5.0 : game.rightBrake * 12.5;
+      game.speedMs = Math.max(0, game.speedMs - (rearDecel + frontDecel) * dt);
+
+      game.crankAngle = (game.crankAngle + game.crankOmega * dt) % (Math.PI * 2);
+      const wheelOmega = game.speedMs / (wheelCircumference / (Math.PI * 2));
+      if (!game.rearLocked) game.rearWheelAngle -= wheelOmega * dt;
+      if (!game.frontLocked) game.frontWheelAngle -= wheelOmega * dt;
+
+      const prevDist = game.distance;
+      game.distance += game.speedMs * dt;
+      const pxPerMeter = 42;
+      game.roadOffset += game.speedMs * pxPerMeter * dt;
+      game.hillOffset += game.speedMs * pxPerMeter * 0.18 * dt;
+      game.mountainOffset += game.speedMs * pxPerMeter * 0.05 * dt;
+
+      const currentKmh = game.speedMs * 3.6;
+      if (currentKmh > game.maxSpeedKmh) game.maxSpeedKmh = currentKmh;
+
+      // 4. カーブ進入速度チェック
+      for (let i = 0; i < CORNERS.length; i++) {
+        const c = CORNERS[i];
+        if (!c.passed && prevDist < c.dist && game.distance >= c.dist) {
+          if (currentKmh > c.maxSpeedKmh + 0.5) {
+            triggerGameOver(
+              `${c.name} でコースアウト！`,
+              `目標速度 <strong class="text-amber-300">${c.maxSpeedKmh} km/h</strong> 以下に対し、<strong class="text-rose-400">${currentKmh.toFixed(1)} km/h</strong> で進入したため曲がりきれませんでした！`
+            );
+            return;
+          } else {
+            c.passed = true;
+            playCornerClearSound();
+            const margin = c.maxSpeedKmh - currentKmh;
+            if (margin < 4.5) {
+              spawnFloatingFeedback('PERFECT CORNER!!', `ギリギリ攻めた！ (${currentKmh.toFixed(1)} km/h)`, 'text-amber-300');
+            } else {
+              spawnFloatingFeedback('CORNER CLEAR!', `ナイス減速！ (${currentKmh.toFixed(1)} km/h)`, 'text-emerald-300');
+            }
+          }
+        }
+      }
+
+      // 5. ゴール判定
+      if (game.distance >= COURSE_LENGTH) {
+        game.distance = COURSE_LENGTH;
+        triggerGoal();
+      }
+    }
+
+    function updateHUD() {
+      const kmh = game.speedMs * 3.6;
+      const rpm = Math.round((game.crankOmega / (Math.PI * 2)) * 60);
+      const gear = GEARS[game.gearIndex];
+      const reqForce = getRequiredForceRatio();
+
+      speedDisplay.textContent = kmh.toFixed(1);
+      cadenceDisplay.textContent = `${rpm}`;
+      gearDisplay.textContent = `${gear.num}`;
+      centerGearNum.textContent = `${gear.num}`;
+      gearRatioDisplay.textContent = `52×${gear.rear}T`;
+
+      timeDisplay.textContent = formatTime(game.elapsedTime);
+      const remainGoal = Math.max(0, Math.ceil(COURSE_LENGTH - game.distance));
+      goalDistDisplay.textContent = `${remainGoal} m`;
+      const progressPct = Math.min(100, (game.distance / COURSE_LENGTH) * 100);
+      courseProgressBar.style.width = `${progressPct}%`;
+      courseRiderMarker.style.left = `${progressPct}%`;
+      currentDistLabel.textContent = `${Math.floor(game.distance)}m`;
+
+      leftTorqueLabel.textContent = `効率: ${Math.round(game.leftPedal.efficiency * 100)}%`;
+      rightTorqueLabel.textContent = `効率: ${Math.round(game.rightPedal.efficiency * 100)}%`;
+
+      const totalTorque = Math.max(0,
+        (game.rightPedal.vx * Math.sin(-game.crankAngle) + game.rightPedal.vy * -Math.cos(-game.crankAngle)) +
+        (game.leftPedal.vx * Math.sin(-game.crankAngle + Math.PI) + game.leftPedal.vy * -Math.cos(-game.crankAngle + Math.PI))
+      );
+      resistanceBar.style.width = `${Math.min(100, reqForce * 85)}%`;
+      appliedTorqueBar.style.width = `${Math.min(100, totalTorque * 85)}%`;
+      torqueValueText.textContent = `${Math.round(totalTorque * 65)} Nm`;
+
+      // シフト推奨パルスガイド
+      const needDown = game.phase === 'playing' && game.gearIndex > 0 && (reqForce > 0.88 || (totalTorque > 0.15 && totalTorque < reqForce));
+      const needUp = game.phase === 'playing' && game.gearIndex < GEARS.length - 1 && rpm > 98 && reqForce < 0.72;
+      shiftDownBtn.classList.toggle('shift-hint-down', needDown);
+      shiftUpBtn.classList.toggle('shift-hint-up', needUp);
+
+      rearLockBar.style.width = `${Math.round(game.rearLockGauge * 100)}%`;
+      frontLockBar.style.width = `${Math.round(game.frontLockGauge * 100)}%`;
+      rearLockText.textContent = game.rearLocked ? 'LOCK!!' : `LOCK ${Math.round(game.rearLockGauge * 100)}%`;
+      rearLockText.className = game.rearLocked ? 'text-[1.2cqw] font-black text-rose-400 animate-pulse mt-[0.4cqw]' : 'text-[1.2cqw] font-bold text-slate-400 mt-[0.4cqw]';
+      frontLockText.textContent = game.frontLocked ? 'LOCK!!' : `LOCK ${Math.round(game.frontLockGauge * 100)}%`;
+      frontLockText.className = game.frontLocked ? 'text-[1.2cqw] font-black text-rose-400 animate-pulse mt-[0.4cqw]' : 'text-[1.2cqw] font-bold text-slate-400 mt-[0.4cqw]';
+
+      const nextCorner = CORNERS.find((c) => !c.passed && c.dist >= game.distance);
+      if (nextCorner && (nextCorner.dist - game.distance) <= nextCorner.warnDist) {
+        cornerWarningBox.classList.remove('hidden');
+        cornerNameLabel.textContent = nextCorner.name;
+        cornerTargetSpeed.textContent = `${nextCorner.maxSpeedKmh} km/h`;
+        cornerRemainDist.textContent = `${Math.max(0, Math.ceil(nextCorner.dist - game.distance))} m`;
+
+        const isSafeSpeed = kmh <= nextCorner.maxSpeedKmh;
+        if (isSafeSpeed) {
+          cornerAlertCard.className = 'bg-emerald-600/95 backdrop-blur-md text-white border-[0.28cqw] border-emerald-200 shadow-2xl rounded-[1.8cqw] px-[2cqw] py-[0.9cqw] flex items-center gap-[1.4cqw] transition-colors duration-150';
+          cornerStatusIcon.textContent = '✅';
+          cornerSafetyBadge.textContent = '進入OK!';
+          cornerSafetyBadge.className = 'px-[0.8cqw] py-[0.15cqw] rounded-full text-[1cqw] font-black bg-white text-emerald-800';
+        } else {
+          cornerAlertCard.className = 'corner-alert bg-rose-600/95 backdrop-blur-md text-white border-[0.28cqw] border-amber-300 shadow-2xl rounded-[1.8cqw] px-[2cqw] py-[0.9cqw] flex items-center gap-[1.4cqw] transition-colors duration-150';
+          cornerStatusIcon.textContent = '⚠️';
+          cornerSafetyBadge.textContent = '要減速!';
+          cornerSafetyBadge.className = 'px-[0.8cqw] py-[0.15cqw] rounded-full text-[1cqw] font-black bg-amber-300 text-rose-900';
+        }
+      } else {
+        cornerWarningBox.classList.add('hidden');
+      }
+
+      return nextCorner;
+    }
+
+    function renderScene(nextCorner) {
+      const size = viewportSize || gameViewport.getBoundingClientRect().width || 600;
+
+      const speedZoom = 1.0 - Math.min(0.06, (game.speedMs * 3.6) / 750);
+      const groundY = size * 0.745;
+      const baseScale = (size / 850) * speedZoom;
+
+      const shakeX = game.cameraShake > 0 ? (Math.random() - 0.5) * game.cameraShake : 0;
+      const shakeY = game.cameraShake > 0 ? (Math.random() - 0.5) * game.cameraShake : 0;
+
+      ctx.save();
+      ctx.translate(shakeX, shakeY);
+      drawBackground(size, size, groundY, nextCorner);
+
+      ctx.save();
+      const stallJitterX = game.stallShake > 0.1 ? (Math.random() - 0.5) * game.stallShake * 3.5 : 0;
+      const centerX = size * 0.52 + stallJitterX;
+      const bbWorldY = groundY - BIKE.wheelRadius * baseScale + game.crashOffsetY * baseScale;
+
+      ctx.translate(centerX, bbWorldY);
+      ctx.rotate(game.crashAngle + game.bikePitch);
+      ctx.scale(baseScale, baseScale);
+
+      // 路面の影
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
+      ctx.beginPath();
+      ctx.ellipse(-25, BIKE.wheelRadius + 2, 230, 11, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // スイートスポットパワーオーラ
+      if (game.sweetSpotGlow > 0.08) {
+        const auraGrad = ctx.createRadialGradient(0, 0, 8, 0, 0, 72);
+        auraGrad.addColorStop(0, `rgba(56, 189, 248, ${game.sweetSpotGlow * 0.42})`);
+        auraGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+        ctx.fillStyle = auraGrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, 72, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      const hipShiftX = game.riderLean < 0 ? -game.riderLean * 10 : 0;
+
+      // 1. 奥側（左脚）
+      drawLeg({
+        hip: { x: RIDER.hip.x - 4 + hipShiftX, y: RIDER.hip.y - 2 + Math.sin(game.crankAngle * 2) * 0.9 },
+        crankAngle: game.crankAngle + Math.PI,
+        isNearSide: false
+      });
+
+      // 2. 前後ホイール
+      drawWheel(BIKE.rearHub, game.rearWheelAngle, game.rearLocked);
+      drawWheel(BIKE.frontHub, game.frontWheelAngle, game.frontLocked);
+
+      // 3. フレーム
+      drawRoadBikeFrame(game.crankAngle);
+
+      // 4. 上半身・頭部
+      drawCyclistUpperBody(game.crankAngle);
+
+      // 5. 手前側（右脚）
+      const rightTheta = -game.crankAngle;
+      const rightPedalPin = {
+        x: Math.cos(rightTheta) * BIKE.crankLength,
+        y: Math.sin(rightTheta) * BIKE.crankLength
+      };
+      drawCrankArm(rightPedalPin, '#1e242b');
+      drawLeg({
+        hip: { x: RIDER.hip.x + hipShiftX, y: RIDER.hip.y + Math.sin(game.crankAngle * 2) * 0.9 },
+        crankAngle: game.crankAngle,
+        isNearSide: true
+      });
+      drawBezierCircle(0, 0, 6.5, { fill: '#334155', stroke: '#94a3b8', lineWidth: 1.5 });
+
+      // スイートスポット風粒子
+      for (let i = game.windParticles.length - 1; i >= 0; i--) {
+        const p = game.windParticles[i];
+        p.x += p.vx * 0.016;
+        p.y += p.vy * 0.016;
+        p.life -= 0.06;
+        if (p.life <= 0) { game.windParticles.splice(i, 1); continue; }
+        ctx.strokeStyle = p.color;
+        ctx.globalAlpha = p.life * 0.85;
+        ctx.lineWidth = 2.6;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - 16 * p.life, p.y);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
+      // 汗しぶき
+      for (let i = game.sweatDrops.length - 1; i >= 0; i--) {
+        const s = game.sweatDrops[i];
+        s.x += s.vx * 0.016;
+        s.y += s.vy * 0.016;
+        s.vy += 120 * 0.016;
+        s.life -= 0.045;
+        if (s.life <= 0) { game.sweatDrops.splice(i, 1); continue; }
+        ctx.fillStyle = `rgba(186, 230, 253, ${s.life * 0.9})`;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // スキッド白煙
+      for (let i = game.skidParticles.length - 1; i >= 0; i--) {
+        const p = game.skidParticles[i];
+        p.x += p.vx * 0.016;
+        p.y += p.vy * 0.016;
+        p.life -= 0.04;
+        if (p.life <= 0) { game.skidParticles.splice(i, 1); continue; }
+        ctx.fillStyle = `rgba(241, 245, 249, ${p.life * 0.75})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, (1.4 - p.life) * 14, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+      ctx.restore();
+
+      // ゴール時の紙吹雪
+      if (game.confetti.length > 0) {
+        for (let i = game.confetti.length - 1; i >= 0; i--) {
+          const c = game.confetti[i];
+          c.x += c.vx * 0.016;
+          c.y += c.vy * 0.016;
+          c.rot += c.vRot * 0.016;
+          if (c.y > 1.1) { game.confetti.splice(i, 1); continue; }
+          ctx.save();
+          ctx.translate(c.x * size, c.y * size);
+          ctx.rotate(c.rot);
+          ctx.fillStyle = c.color;
+          ctx.fillRect(-c.size * size * 0.5, -c.size * size * 0.25, c.size * size, c.size * size * 0.5);
+          ctx.restore();
+        }
+      }
+
+      // 左右ペダリング円盤UIの更新
+      const thetaR = -game.crankAngle;
+      const thetaL = thetaR + Math.PI;
+      drawPedalPadUI(rightPadCtx, rightPad, thetaR, game.rightPedal, '#38bdf8');
+      drawPedalPadUI(leftPadCtx, leftPad, thetaL, game.leftPedal, '#fbbf24');
+    }
+
+    function gameLoop(now) {
+      requestAnimationFrame(gameLoop);
+      try {
+        const dt = Math.min((now - game.lastTime) / 1000, 0.05);
+        game.lastTime = now;
+        updatePhysics(dt);
+        const nextCorner = updateHUD();
+        renderScene(nextCorner);
+      } catch (err) {
+        console.error('Game loop error:', err);
+      }
+    }
+
+    /**
+     * ============================================================================
+     * コントロールイベント（シフト・ブレーキ・スタート・キーボード）
+     * ============================================================================
+     */
+    function shiftGear(delta) {
+      initAudio();
+      const next = Math.min(GEARS.length - 1, Math.max(0, game.gearIndex + delta));
+      if (next !== game.gearIndex) {
+        game.gearIndex = next;
+        playShiftSound(delta > 0);
+      }
+    }
+
+    shiftUpBtn.addEventListener('click', () => shiftGear(1));
+    shiftDownBtn.addEventListener('click', () => shiftGear(-1));
+
+    leftBrakeSlider.addEventListener('input', (e) => {
+      initAudio();
+      game.leftBrake = Number(e.target.value) / 100;
+    });
+    rightBrakeSlider.addEventListener('input', (e) => {
+      initAudio();
+      game.rightBrake = Number(e.target.value) / 100;
+    });
+
+    const releaseLeftBrake = () => { leftBrakeSlider.value = 0; game.leftBrake = 0; };
+    const releaseRightBrake = () => { rightBrakeSlider.value = 0; game.rightBrake = 0; };
+    leftBrakeSlider.addEventListener('pointerup', releaseLeftBrake);
+    leftBrakeSlider.addEventListener('pointercancel', releaseLeftBrake);
+    rightBrakeSlider.addEventListener('pointerup', releaseRightBrake);
+    rightBrakeSlider.addEventListener('pointercancel', releaseRightBrake);
+
+    window.addEventListener('keydown', (e) => {
+      const k = e.key;
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(k)) {
+        e.preventDefault();
+      }
+
+      // 左足ペダリング 4方向キー (W / A / S / D)
+      let leftChanged = false;
+      if (k === 'w' || k === 'W') { pedalKeyState.left.up = true; leftChanged = true; }
+      if (k === 's' || k === 'S') { pedalKeyState.left.down = true; leftChanged = true; }
+      if (k === 'a' || k === 'A') { pedalKeyState.left.left = true; leftChanged = true; }
+      if (k === 'd' || k === 'D') { pedalKeyState.left.right = true; leftChanged = true; }
+      if (leftChanged) {
+        initAudio();
+        applyKeyboardPedalVector(pedalKeyState.left, game.leftPedal);
+      }
+
+      // 右足ペダリング 4方向キー (↑ / ↓ / ← / → および I / J / K / L)
+      let rightChanged = false;
+      if (k === 'ArrowUp' || k === 'i' || k === 'I') { pedalKeyState.right.up = true; rightChanged = true; }
+      if (k === 'ArrowDown' || k === 'k' || k === 'K') { pedalKeyState.right.down = true; rightChanged = true; }
+      if (k === 'ArrowLeft' || k === 'j' || k === 'J') { pedalKeyState.right.left = true; rightChanged = true; }
+      if (k === 'ArrowRight' || k === 'l' || k === 'L') { pedalKeyState.right.right = true; rightChanged = true; }
+      if (rightChanged) {
+        initAudio();
+        applyKeyboardPedalVector(pedalKeyState.right, game.rightPedal);
+      }
+
+      if (e.repeat) return;
+      // シフトチェンジ (U: 軽く / O: 重く)
+      if (k === 'u' || k === 'U') shiftGear(-1);
+      if (k === 'o' || k === 'O') shiftGear(1);
+      // ブレーキ (F: 左 / H: 右)
+      if (k === 'f' || k === 'F') { leftBrakeSlider.value = 65; game.leftBrake = 0.65; }
+      if (k === 'h' || k === 'H') { rightBrakeSlider.value = 60; game.rightBrake = 0.60; }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      const k = e.key;
+
+      let leftChanged = false;
+      if (k === 'w' || k === 'W') { pedalKeyState.left.up = false; leftChanged = true; }
+      if (k === 's' || k === 'S') { pedalKeyState.left.down = false; leftChanged = true; }
+      if (k === 'a' || k === 'A') { pedalKeyState.left.left = false; leftChanged = true; }
+      if (k === 'd' || k === 'D') { pedalKeyState.left.right = false; leftChanged = true; }
+      if (leftChanged) applyKeyboardPedalVector(pedalKeyState.left, game.leftPedal);
+
+      let rightChanged = false;
+      if (k === 'ArrowUp' || k === 'i' || k === 'I') { pedalKeyState.right.up = false; rightChanged = true; }
+      if (k === 'ArrowDown' || k === 'k' || k === 'K') { pedalKeyState.right.down = false; rightChanged = true; }
+      if (k === 'ArrowLeft' || k === 'j' || k === 'J') { pedalKeyState.right.left = false; rightChanged = true; }
+      if (k === 'ArrowRight' || k === 'l' || k === 'L') { pedalKeyState.right.right = false; rightChanged = true; }
+      if (rightChanged) applyKeyboardPedalVector(pedalKeyState.right, game.rightPedal);
+
+      if (k === 'f' || k === 'F') releaseLeftBrake();
+      if (k === 'h' || k === 'H') releaseRightBrake();
+    });
+
+    window.addEventListener('keyup', (e) => {
+      const k = e.key;
+
+      let leftChanged = false;
+      if (k === 'w' || k === 'W') { pedalKeyState.left.up = false; leftChanged = true; }
+      if (k === 's' || k === 'S') { pedalKeyState.left.down = false; leftChanged = true; }
+      if (k === 'a' || k === 'A') { pedalKeyState.left.left = false; leftChanged = true; }
+      if (k === 'd' || k === 'D') { pedalKeyState.left.right = false; leftChanged = true; }
+      if (leftChanged) applyKeyboardPedalVector(pedalKeyState.left, game.leftPedal);
+
+      let rightChanged = false;
+      if (k === 'ArrowUp' || k === 'i' || k === 'I') { pedalKeyState.right.up = false; rightChanged = true; }
+      if (k === 'ArrowDown' || k === 'k' || k === 'K') { pedalKeyState.right.down = false; rightChanged = true; }
+      if (k === 'ArrowLeft' || k === 'j' || k === 'J') { pedalKeyState.right.left = false; rightChanged = true; }
+      if (k === 'ArrowRight' || k === 'l' || k === 'L') { pedalKeyState.right.right = false; rightChanged = true; }
+      if (rightChanged) applyKeyboardPedalVector(pedalKeyState.right, game.rightPedal);
+
+      if (k === 'q' || k === 'Q') releaseLeftBrake();
+      if (k === 'e' || k === 'E') releaseRightBrake();
+    });
+
+    window.addEventListener('blur', () => {
+      pedalKeyState.left = { up: false, down: false, left: false, right: false };
+      pedalKeyState.right = { up: false, down: false, left: false, right: false };
+      applyKeyboardPedalVector(pedalKeyState.left, game.leftPedal);
+      applyKeyboardPedalVector(pedalKeyState.right, game.rightPedal);
+      releaseLeftBrake();
+      releaseRightBrake();
+    });
+
+    function startNewRace() {
+      initAudio();
+      game.phase = 'countdown';
+      game.countdownVal = 3;
+      game.countdownTimer = 0.68;
+      game.elapsedTime = 0;
+      game.distance = 0;
+      game.speedMs = 0;
+      game.maxSpeedKmh = 0;
+      game.crankAngle = 0.35;
+      game.crankOmega = 0;
+      game.gearIndex = 1;
+      game.leftBrake = 0;
+      game.rightBrake = 0;
+      leftBrakeSlider.value = 0;
+      rightBrakeSlider.value = 0;
+      game.rearLocked = false;
+      game.frontLocked = false;
+      game.rearLockGauge = 0;
+      game.frontLockGauge = 0;
+      game.bikePitch = 0;
+      game.riderLean = 0;
+      game.stallShake = 0;
+      game.cameraShake = 0;
+      game.sweetSpotGlow = 0;
+      game.skidParticles = [];
+      game.windParticles = [];
+      game.sweatDrops = [];
+      game.confetti = [];
+      game.crashAngle = 0;
+      game.crashOffsetY = 0;
+      dangerVignette.style.opacity = '0';
+      CORNERS.forEach((c) => { c.passed = false; });
+      shareXBtn.classList.add('hidden');
+      overlayModal.classList.add('hidden');
+
+      countdownLayer.classList.remove('hidden');
+      countdownText.textContent = '3';
+      countdownText.className = 'countdown-pop text-[14cqw] font-black italic text-white drop-shadow-[0_0.8cqw_2cqw_rgba(15,23,42,0.85)]';
+      void countdownText.offsetWidth;
+      playCountdownSound(false);
+    }
+
+    startRaceBtn.addEventListener('click', startNewRace);
+
+    // 外部リソースのload待ちをせず即座に初期化＆ループ開始
+    resizeCanvas();
+    renderCourseMarkers();
+    game.lastTime = performance.now();
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
